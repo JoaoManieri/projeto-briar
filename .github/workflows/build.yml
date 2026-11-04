@@ -5,6 +5,10 @@ on:
   push:
     tags: ['v*']
 
+# Necessário para o action-gh-release criar a Release com o GITHUB_TOKEN
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
