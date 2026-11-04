@@ -1,0 +1,18 @@
+# Dependências
+node_modules/
+
+# Interface compilada (npm run build) e instaladores (npm run dist:*)
+dist/
+release/
+
+# Configuração local do modo navegador (caminho do clone)
+.pindorama/
+
+# Logs e lixo de sistema/editor
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

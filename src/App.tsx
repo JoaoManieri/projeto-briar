@@ -1,0 +1,435 @@
+import {useEffect,useMemo,useRef,useState,type CSSProperties,type ReactNode} from 'react';
+import {
+  ArrowDown,ArrowDownToLine,ArrowLeft,ArrowUp,ArrowUpToLine,Check,ChevronDown,ChevronRight,CircleAlert,CircleHelp,Cloud,Copy,
+  FileCode2,FolderGit2,GitBranch,GitBranchPlus,GitCommitHorizontal,GitMerge,Laptop,LockKeyhole,Maximize2,Minus,Pencil,Plus,
+  RefreshCw,Search,Sprout,Tag,Terminal,TriangleAlert,X
+} from 'lucide-react';
+import {ancestors,layoutGraph,palette,type History,type Commit} from './history';
+
+type FileState={path:string;oldPath?:string;index:string;worktree:string;staged:boolean;unstaged:boolean;untracked:boolean;conflicted:boolean};
+type BranchRef={name:string;sha:string;remote:boolean};
+type Status={root:string;branch:string|null;head:string|null;files:FileState[];merging:{message:string;source?:string|null}|null;branches:BranchRef[];tags:{name:string;sha:string}[];upstream:string|null;ahead:number;behind:number;remote:string|null;remotes:string[];lastFetch:string|null;indexFingerprint:string;conflicted:boolean;audit:{command:string;output:string;date:string;success:boolean}[]};
+type State={status:Status|null;history:(History&{truncated?:boolean})|null;initialError:string};
+type Dialog='repo'|'operations'|'help'|'branch'|'merge'|'push'|'pull'|null;
+type Choice={path:string;staged:boolean;sha?:string;conflicted?:boolean};
+type Label={key:string;text:string;local?:string;remote?:string;tag?:boolean;current:boolean;sha:string};
+type Preview={branch:string;current:string|null;into:string;needsCheckout:boolean;intoRemote:boolean;incoming:number;fastForward:boolean;conflicts:string[]};
+type Segment={type:'text';lines:string[]}|{type:'conflict';ours:string[];theirs:string[]};
+type Pick='ours'|'theirs'|'both'|'both-rev';
+declare global{interface Window{briar?:{desktop:boolean;pickFolder:()=>Promise<string|null>}}}
+const DRAG='text/x-briar-branch';
+
+// Divide o arquivo em trechos comuns e blocos <<<<<<< ======= >>>>>>> (diff3 incluso).
+function parseConflict(text:string):Segment[]{
+  const out:Segment[]=[];let common:string[]=[];let block:{ours:string[];base:string[];theirs:string[]}|null=null;let part:'ours'|'base'|'theirs'='ours';
+  for(const line of text.split('\n')){
+    const l=line.replace(/\r$/,'');
+    if(!block&&/^<{7}( |$)/.test(l)){if(common.length)out.push({type:'text',lines:common});common=[];block={ours:[],base:[],theirs:[]};part='ours';}
+    else if(block&&part==='ours'&&/^\|{7}( |$)/.test(l))part='base';
+    else if(block&&part!=='theirs'&&l==='=======')part='theirs';
+    else if(block&&part==='theirs'&&/^>{7}( |$)/.test(l)){out.push({type:'conflict',ours:block.ours,theirs:block.theirs});block=null;}
+    else if(block)block[part].push(line);
+    else common.push(line);
+  }
+  if(block)return [{type:'text',lines:text.split('\n')}];
+  if(common.length)out.push({type:'text',lines:common});
+  return out;
+}
+const pickLines=(seg:{ours:string[];theirs:string[]},p:Pick)=>p==='ours'?seg.ours:p==='theirs'?seg.theirs:p==='both'?[...seg.ours,...seg.theirs]:[...seg.theirs,...seg.ours];
+
+function ConflictEditor({text,ours,theirs,busy,onSave}:{text:string;ours:string;theirs:string;busy:boolean;onSave:(content:string)=>void}){
+  const segments=useMemo(()=>parseConflict(text),[text]);
+  const total=segments.filter(x=>x.type==='conflict').length;
+  const [picks,setPicks]=useState<Record<number,Pick>>({});
+  const done=Object.keys(picks).length;
+  function compose(){let i=0;const lines:string[]=[];for(const seg of segments){if(seg.type==='text')lines.push(...seg.lines);else lines.push(...pickLines(seg,picks[i++]));}return lines.join('\n');}
+  let index=0;
+  return <div className="cedit">
+    {segments.map((seg,k)=>{
+      if(seg.type==='text'){const many=seg.lines.length>10;const shown=many?[...seg.lines.slice(0,4),null,...seg.lines.slice(-4)]:seg.lines;return <pre key={k} className="cctx">{shown.map((l,j)=>l===null?<span key={j} className="cfold">… {seg.lines.length-8} linhas iguais nos dois lados …{'\n'}</span>:<span key={j}>{l}{'\n'}</span>)}</pre>;}
+      const i=index++;const pick=picks[i];
+      return <div key={k} className={`cblock ${pick?'done':''}`}>
+        <div className="cblock-title"><TriangleAlert size={13}/>Conflito {i+1} de {total}{pick&&<span className="cblock-ok"><Check size={12}/>resolvido</span>}</div>
+        <div className="csides">
+          <div className={`cside ours ${pick&&pick!=='theirs'?'chosen':''} ${pick==='theirs'?'dropped':''}`}><div className="cside-label">SUA VERSÃO · {ours}</div><pre>{seg.ours.join('\n')||'(vazio)'}</pre></div>
+          <div className={`cside theirs ${pick&&pick!=='ours'?'chosen':''} ${pick==='ours'?'dropped':''}`}><div className="cside-label">RECEBIDA · {theirs}</div><pre>{seg.theirs.join('\n')||'(vazio)'}</pre></div>
+        </div>
+        <div className="cacts">
+          {([['ours','Usar a minha','ours'],['theirs','Usar a recebida','theirs'],['both','As duas (minha primeiro)','ghost'],['both-rev','As duas (recebida primeiro)','ghost']] as [Pick,string,string][]).map(([v,label,cls])=><button key={v} className={`btn sm ${cls} ${pick===v?'picked':''}`} onClick={()=>setPicks(p=>({...p,[i]:v}))}>{label}</button>)}
+        </div>
+        {(pick==='both'||pick==='both-rev')&&<div className="cresult"><div className="cside-label">RESULTADO</div><pre>{pickLines(seg,pick).join('\n')}</pre></div>}
+      </div>;
+    })}
+    <div className="cfoot"><span className="grow muted">{done} de {total} {total===1?'conflito resolvido':'conflitos resolvidos'} neste arquivo</span>
+      <button className="btn sm ours" onClick={()=>setPicks(Object.fromEntries(Array.from({length:total},(_,i)=>[i,'ours'])))}>Tudo meu</button>
+      <button className="btn sm theirs" onClick={()=>setPicks(Object.fromEntries(Array.from({length:total},(_,i)=>[i,'theirs'])))}>Tudo recebido</button>
+      <button className="btn primary" disabled={busy||done<total} onClick={()=>onSave(compose())}><Check size={13}/>Salvar e marcar resolvido</button></div>
+  </div>;
+}
+
+async function api(route:string,body?:unknown,signal?:AbortSignal){
+  const r=await fetch('/api/'+route,{method:body===undefined?'GET':'POST',headers:{'X-Pindorama-Client':'local',...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)}),signal});
+  const data=await r.json();
+  if(!r.ok)throw new Error(data.error||'O servidor Git não respondeu.');
+  return data;
+}
+const tz=Intl.DateTimeFormat().resolvedOptions().timeZone;
+const fmt=(d:string,full=false)=>new Intl.DateTimeFormat('pt-BR',{day:'2-digit',month:'short',...(full?{year:'numeric',hour:'2-digit',minute:'2-digit'}:{}),timeZone:tz}).format(new Date(d));
+const color=(n:number)=>palette[n%palette.length];
+const short=(s:string)=>s.slice(0,7);
+const initials=(s:string)=>s.split(/\s+/).filter(Boolean).map(w=>w[0]).slice(0,2).join('').toUpperCase()||'?';
+const subject=(m:string)=>m.split('\n')[0];
+const splitPath=(p:string)=>{const i=p.lastIndexOf('/');return i<0?['',p]:[p.slice(0,i+1),p.slice(i+1)];};
+const WIP='WIP';
+
+function statusLetter(f:FileState,staged:boolean){
+  if(f.conflicted)return {letter:'!',cls:'st-conflict',title:'Em conflito'};
+  const c=staged?f.index:f.untracked?'?':f.worktree;
+  const map:Record<string,[string,string]>={'?':['st-add','Novo'],A:['st-add','Adicionado'],M:['st-mod','Modificado'],D:['st-del','Removido'],R:['st-ren','Renomeado'],C:['st-ren','Copiado'],T:['st-mod','Tipo alterado']};
+  const [cls,title]=map[c]||['st-mod',c];
+  return {letter:c==='?'?'+':c,cls,title};
+}
+
+export default function App(){
+  const [state,setState]=useState<State|null>(null);
+  const [selected,setSelected]=useState('');
+  const [highlight,setHighlight]=useState('all');
+  const [query,setQuery]=useState('');
+  const [author,setAuthor]=useState('all');
+  const [dialog,setDialog]=useState<Dialog>(null);
+  const [busy,setBusy]=useState('');
+  const [error,setError]=useState('');
+  const [toast,setToast]=useState('');
+  const [repoPath,setRepoPath]=useState('~/Projetos/projeto-pindorama');
+  const [zoom,setZoom]=useState(1);
+  const [tab,setTab]=useState<'files'|'info'>('files');
+  const [message,setMessage]=useState('');
+  const [description,setDescription]=useState('');
+  const [choice,setChoice]=useState<Choice|null>(null);
+  const [diff,setDiff]=useState('');
+  const [commitFiles,setCommitFiles]=useState<{files:{path:string;additions:number;deletions:number;binary?:boolean}[];merge:boolean}|null>(null);
+  const [target,setTarget]=useState('');
+  const [preview,setPreview]=useState<Preview|null>(null);
+  const [previewError,setPreviewError]=useState('');
+  const [branchName,setBranchName]=useState('');
+  const [branchFrom,setBranchFrom]=useState<'head'|'selected'>('head');
+  const [branchCheckout,setBranchCheckout]=useState(true);
+  const [pullMode,setPullMode]=useState<'ff'|'merge'>('ff');
+  const [collapsed,setCollapsed]=useState<Record<string,boolean>>({});
+  const [sideFilter,setSideFilter]=useState('');
+  const [updated,setUpdated]=useState('');
+  const [into,setInto]=useState('');
+  const [drag,setDrag]=useState<string|null>(null);
+  const [dropOn,setDropOn]=useState<string|null>(null);
+  const [rawConflict,setRawConflict]=useState(false);
+  const autoOpened=useRef(false);
+  const search=useRef<HTMLInputElement>(null),scroll=useRef<HTMLDivElement>(null),modal=useRef<HTMLDivElement>(null),busyRef=useRef(false),seq=useRef(0);
+
+  const h=state?.history,s=state?.status;
+  const hasWip=!!s&&(s.files.length>0||!!s.merging);
+  const graphCommits=useMemo<Commit[]>(()=>{
+    const list=h?.commits||[];
+    if(!hasWip||!s?.head||!list.some(c=>c.sha===s.head))return list;
+    return [{sha:WIP,parents:[s.head],message:'// WIP',author:'',date:'9999-12-31T00:00:00Z'},...list];
+  },[h,hasWip,s?.head]);
+  const layout=useMemo(()=>layoutGraph(graphCommits,hasWip?WIP:s?.head),[graphCommits,hasWip,s?.head]);
+  const rows=layout.rows;
+  const realCommits=useMemo(()=>rows.filter(c=>c.sha!==WIP),[rows]);
+  const current=selected===WIP&&hasWip?null:rows.find(c=>c.sha===selected&&c.sha!==WIP)||null;
+  const showWip=hasWip&&(selected===WIP||!current);
+  const shownCommit=showWip?null:current||realCommits.find(c=>c.sha===s?.head)||realCommits[0]||null;
+  const authors=useMemo(()=>[...new Set(realCommits.map(c=>c.author))],[realCommits]);
+  const allBranches=s?.branches||[];
+  const localBranches=allBranches.filter(b=>!b.remote);
+  const remoteBranches=allBranches.filter(b=>b.remote);
+  const remoteOf=(name:string)=>[...(s?.remotes||[])].sort((a,b)=>b.length-a.length).find(r=>name.startsWith(r+'/'))||name.split('/')[0];
+
+  const headChain=useMemo(()=>{const set=new Set<string>();const byId=new Map(rows.map(c=>[c.sha,c]));let id:string|undefined=hasWip?WIP:s?.head||undefined;while(id&&byId.has(id)&&!set.has(id)){set.add(id);id=byId.get(id)!.parents[0];}return set;},[rows,hasWip,s?.head]);
+  const highlightIds=useMemo(()=>highlight==='all'?null:ancestors(allBranches.find(b=>b.name===highlight)?.sha||'',realCommits),[highlight,allBranches,realCommits]);
+  const matches=useMemo(()=>new Set(rows.filter(c=>c.sha===WIP||((!highlightIds||highlightIds.has(c.sha))&&(author==='all'||c.author===author)&&`${c.message} ${c.sha} ${c.author}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()))).map(c=>c.sha)),[rows,highlightIds,author,query]);
+  const filtering=highlight!=='all'||query!==''||author!=='all';
+
+  const labels=useMemo(()=>{
+    const map=new Map<string,Label[]>();
+    const push=(l:Label)=>{if(!layout.cols.has(l.sha))return;const list=map.get(l.sha)||[];list.push(l);map.set(l.sha,list);};
+    const used=new Set<string>();
+    for(const b of localBranches){
+      const twin=remoteBranches.find(r=>r.sha===b.sha&&r.name.slice(remoteOf(r.name).length+1)===b.name);
+      if(twin)used.add(twin.name);
+      push({key:'l:'+b.name,text:b.name,local:b.name,remote:twin?.name,current:b.name===s?.branch,sha:b.sha});
+    }
+    for(const r of remoteBranches)if(!used.has(r.name))push({key:'r:'+r.name,text:r.name,remote:r.name,current:false,sha:r.sha});
+    for(const t of s?.tags||[])push({key:'t:'+t.name,text:t.name,tag:true,current:false,sha:t.sha});
+    for(const list of map.values())list.sort((a,b)=>Number(b.current)-Number(a.current)||Number(!!a.tag)-Number(!!b.tag)||Number(!a.local)-Number(!b.local));
+    return map;
+  },[s,layout]);
+
+  const laneW=Math.round(22*zoom),rowH=Math.round(34*zoom),refW=200;
+  const graphW=Math.max(60,16+layout.width*laneW);
+  const gx=(col:number)=>14+col*laneW+laneW/2-4,gy=(row:number)=>row*rowH+rowH/2;
+  const staged=s?.files.filter(f=>f.staged&&!f.conflicted)||[];
+  const unstaged=s?.files.filter(f=>f.unstaged&&!f.conflicted)||[];
+  const conflicts=s?.files.filter(f=>f.conflicted)||[];
+
+  async function refresh(showError=true){const id=++seq.current;try{const next=await api('state');if(id===seq.current){setState(next);setUpdated(new Date().toISOString());if(next.status)setRepoPath(next.status.root);}}catch(e){if(showError)setError((e as Error).message);}}
+  useEffect(()=>{void refresh();const focus=()=>{if(!busyRef.current)void refresh(false);};window.addEventListener('focus',focus);const interval=setInterval(focus,15000);return()=>{window.removeEventListener('focus',focus);clearInterval(interval);};},[]);
+  useEffect(()=>{if(toast){const t=setTimeout(()=>setToast(''),5000);return()=>clearTimeout(t);}},[toast]);
+  useEffect(()=>{if(!shownCommit)return;setCommitFiles(null);const c=new AbortController();api('commit-files',{sha:shownCommit.sha},c.signal).then(setCommitFiles).catch(e=>{if(e.name!=='AbortError')setCommitFiles(null);});return()=>c.abort();},[shownCommit?.sha,s?.root]);
+  useEffect(()=>{if(!choice){setDiff('');return;}setDiff('Carregando diferenças…');const c=new AbortController();api('diff',{path:choice.path,staged:choice.staged,sha:choice.sha},c.signal).then(r=>setDiff(r.diff)).catch(e=>{if(e.name!=='AbortError')setDiff(e.message);});return()=>c.abort();},[choice,s?.indexFingerprint]);
+  useEffect(()=>{if(choice&&!choice.sha&&s&&!s.files.some(f=>f.path===choice.path))setChoice(null);},[s?.files]);
+  useEffect(()=>{if(s?.merging&&!message)setMessage(subject(s.merging.message));},[s?.merging?.message]);
+  useEffect(()=>{if(dialog!=='merge'||!target){setPreview(null);setPreviewError('');return;}setPreview(null);setPreviewError('');const c=new AbortController();api('merge-preview',{branch:target,into:into||undefined},c.signal).then(setPreview).catch(e=>{if(e.name!=='AbortError')setPreviewError(e.message);});return()=>c.abort();},[dialog,target,into,s?.head]);
+  // Merge com conflito: abre o primeiro arquivo em conflito ao entrar (inclusive ao reabrir o app).
+  useEffect(()=>{const list=s?.files.filter(f=>f.conflicted)||[];if(!s?.merging){autoOpened.current=false;return;}if(list.length&&!autoOpened.current){autoOpened.current=true;setSelected(WIP);setChoice({path:list[0].path,staged:false,conflicted:true});}},[s?.merging,s?.files]);
+  useEffect(()=>{setRawConflict(false);},[choice?.path]);
+
+  function select(id:string,ensure=false){setSelected(id);setChoice(null);if(ensure)requestAnimationFrame(()=>scroll.current?.querySelector(`[data-sha="${id}"]`)?.scrollIntoView({block:'nearest',behavior:'smooth'}));}
+  function reset(){setHighlight('all');setQuery('');setAuthor('all');}
+  function jump(delta:number){const list=rows.filter(c=>matches.has(c.sha));const cur=showWip?WIP:shownCommit?.sha;const i=list.findIndex(c=>c.sha===cur);const next=list[Math.max(0,Math.min(list.length-1,i+delta))];if(next)select(next.sha,true);}
+  useEffect(()=>{function key(e:KeyboardEvent){if(dialog||(e.target as HTMLElement).closest('input,textarea,select'))return;if(e.key==='/'){e.preventDefault();search.current?.focus();}if(e.key==='Escape'&&choice)setChoice(null);if(e.key==='ArrowDown'){e.preventDefault();jump(1);}if(e.key==='ArrowUp'){e.preventDefault();jump(-1);}}window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);});
+  useEffect(()=>{if(!dialog)return;const prev=document.activeElement as HTMLElement;const controls=()=>[...(modal.current?.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],input,textarea,select')||[])];(modal.current?.querySelector<HTMLElement>('[data-autofocus]')||controls()[1]||controls()[0])?.focus();const key=(e:KeyboardEvent)=>{if(e.key==='Escape'&&!busyRef.current)setDialog(null);if(e.key==='Tab'){const list=controls(),first=list[0],last=list[list.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}};window.addEventListener('keydown',key);return()=>{window.removeEventListener('keydown',key);prev?.focus?.();};},[dialog]);
+
+  async function action(name:string,body:unknown={},success='Operação concluída.'):Promise<any>{
+    if(busyRef.current)return null;busyRef.current=true;setBusy(name);setError('');
+    try{const r=await api(name,body);await refresh();setToast(r?.output?.message||success);return r;}
+    catch(e){setError((e as Error).message);await refresh(false);return null;}
+    finally{busyRef.current=false;setBusy('');}
+  }
+  function afterMerge(r:any,ok:string){
+    const list:string[]=r?.output?.conflicts||[];
+    if(list.length){setToast('');setError(`Conflitos em ${list.length} ${list.length===1?'arquivo':'arquivos'}. Resolva no painel à direita.`);setSelected(WIP);setChoice({path:list[0],staged:false,conflicted:true});}
+    else setToast(ok);
+  }
+  async function openRepo(e:React.FormEvent){e.preventDefault();if(await action('repository',{path:repoPath},'Repositório aberto.')){setDialog(null);setSelected('');reset();setChoice(null);setMessage('');setDescription('');}}
+  async function commit(){if(!s)return;const text=message.trim()+(description.trim()?'\n\n'+description.trim():'');if(await action('commit',{message:text,expectedHead:s.head,expectedIndex:s.indexFingerprint},s.merging?'Merge concluído.':'Commit criado.')){setMessage('');setDescription('');setChoice(null);setSelected('');}}
+  async function copy(text:string){try{await navigator.clipboard.writeText(text);setToast('Hash copiado.');}catch{setToast('Não foi possível copiar.');}}
+  function openMerge(name='',dest=''){const d=dest&&dest!==s?.branch?dest:'';setInto(d);setTarget(name||allBranches.find(b=>b.name!==(d||s?.branch))?.name||'');setDialog('merge');}
+  // Checkout direto, sem diálogo: o servidor troca para a local quando ela já existe.
+  async function openSwitch(name:string){if(!name||name===s?.branch)return;if(await action('switch',{branch:name},`Agora em ${name}.`)){setSelected('');reset();}}
+  function dropMerge(source:string,dest:string){if(source===dest)return;if(s?.merging){setError('Já existe um merge em andamento. Resolva os conflitos ou aborte antes.');return;}openMerge(source,dest);}
+  const dnd=(name:string,canDrag=true)=>({draggable:canDrag,
+    onDragStart:(e:React.DragEvent)=>{e.dataTransfer.setData(DRAG,name);e.dataTransfer.effectAllowed='move';setDrag(name);},
+    onDragEnd:()=>{setDrag(null);setDropOn(null);},
+    onDragOver:(e:React.DragEvent)=>{if(!e.dataTransfer.types.includes(DRAG)||drag===name)return;e.preventDefault();e.dataTransfer.dropEffect='move';if(dropOn!==name)setDropOn(name);},
+    onDragLeave:(e:React.DragEvent)=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDropOn(d=>d===name?null:d);},
+    onDrop:(e:React.DragEvent)=>{e.preventDefault();const src=e.dataTransfer.getData(DRAG)||drag;setDrag(null);setDropOn(null);if(src&&src!==name)dropMerge(src,name);}});
+  function openBranch(fromSelected=false){setBranchName('');setBranchFrom(fromSelected?'selected':'head');setBranchCheckout(true);setDialog('branch');}
+  function openPull(){setPullMode(s&&s.ahead>0&&s.behind>0?'merge':'ff');setDialog('pull');}
+  async function runMerge(){const dest=preview?.into||into||s?.branch;const r=await action('merge',{branch:target,into:into||undefined},`${target} integrada em ${dest}.`);if(r){setDialog(null);afterMerge(r,`${target} integrada em ${dest}.${preview?.intoRemote?' Faça Push para publicar.':''}`);}}
+  async function runPull(){const r=await action('pull',{mode:pullMode},'Branch atualizada.');if(r){setDialog(null);afterMerge(r,'Branch atualizada.');}}
+  async function runPush(){if(await action('push',{},'Push concluído.'))setDialog(null);}
+  async function runBranch(e:React.FormEvent){e.preventDefault();const from=branchFrom==='selected'&&shownCommit?shownCommit.sha:undefined;if(await action('branch',{name:branchName,from,checkout:branchCheckout},`Branch ${branchName.trim()} criada.`)){setDialog(null);setSelected('');}}
+  async function resolve(path:string,side:'ours'|'theirs'|'mark'|'content',content?:string){const ok=await action('resolve',{path,side,content},side==='mark'||side==='content'?`${path} resolvido.`:side==='ours'?'Mantida a sua versão.':'Mantida a versão recebida.');if(ok){const next=conflicts.find(f=>f.path!==path);setChoice(next?{path:next.path,staged:false,conflicted:true}:{path,staged:true});}}
+
+  const brand=<span className="brand"><span className="brand-icon"><Sprout size={18}/></span><span>Briar</span></span>;
+  const connectionForm=<form className="connect-form" onSubmit={openRepo}><label htmlFor="repo-path">Caminho do clone neste computador</label><input id="repo-path" data-autofocus value={repoPath} onChange={e=>setRepoPath(e.target.value)} placeholder="~/Projetos/projeto-pindorama" autoComplete="off" spellCheck={false}/><p>O aplicativo usa o Git instalado na sua máquina.</p><div className="connect-actions">{window.briar?.desktop&&<button type="button" className="btn ghost" disabled={!!busy} onClick={async()=>{const dir=await window.briar!.pickFolder();if(dir){setRepoPath(dir);if(await action('repository',{path:dir},'Repositório aberto.')){setDialog(null);setSelected('');reset();setChoice(null);}}}}><FolderGit2 size={15}/>Escolher pasta…</button>}<button disabled={!!busy||!repoPath.trim()} className="btn primary" type="submit"><FolderGit2 size={15}/>{busy==='repository'?'Abrindo…':'Abrir repositório'}</button></div></form>;
+
+  if(!state||!s||!h)return <div className="welcome"><div className="welcome-card">{brand}<h1>Abra um repositório</h1>{!state?<p className="muted">Conectando ao servidor Git local…</p>:connectionForm}{(error||state?.initialError)&&<div className="inline-error" role="alert">{error||state?.initialError}</div>}<p className="welcome-note"><LockKeyhole size={13}/>Servidor local em 127.0.0.1. Nada é enviado para hospedagem.</p></div></div>;
+
+  const toolButton=(icon:ReactNode,label:string,onClick:()=>void,opts:{badge?:number;disabled?:boolean;spin?:boolean;title?:string}={})=><button className="tool" onClick={onClick} disabled={!!busy||opts.disabled} title={opts.title||label}><span className="tool-icon">{icon}{!!opts.badge&&<span className="tool-badge">{opts.badge}</span>}</span><span>{label}</span></button>;
+
+  const sideSection=(id:string,title:ReactNode,count:number,children:ReactNode)=><div className="side-section"><button className="side-heading" onClick={()=>setCollapsed(c=>({...c,[id]:!c[id]}))}>{collapsed[id]?<ChevronRight size={13}/>:<ChevronDown size={13}/>}{title}<span className="count">{count}</span></button>{!collapsed[id]&&children}</div>;
+  const sf=sideFilter.toLocaleLowerCase();
+  const remotesGrouped=s.remotes.map(r=>({remote:r,list:remoteBranches.filter(b=>remoteOf(b.name)===r&&b.name.toLocaleLowerCase().includes(sf))}));
+  const laneOfBranch=(sha:string)=>layout.cols.get(sha);
+
+  const branchItem=(b:BranchRef)=>{const cur=!b.remote&&b.name===s.branch;const lane=laneOfBranch(b.sha);const text=b.remote?b.name.slice(remoteOf(b.name).length+1):b.name;return <div key={b.name} {...dnd(b.name)} className={`side-branch ${cur?'current':''} ${highlight===b.name?'highlighted':''} ${dropOn===b.name?'drop':''} ${drag===b.name?'dragging':''}`} style={{'--lane':lane===undefined?'#5b6670':color(lane)} as CSSProperties}>
+    <button className="side-branch-main" title={`${b.name}\nClique: localizar no grafo · Duplo clique: checkout · Arraste sobre outra branch: merge`} onClick={()=>{if(layout.cols.has(b.sha))select(b.sha,true);}} onDoubleClick={()=>openSwitch(b.name)}>
+      {cur?<Check size={13} className="cur-check"/>:<span className="lane-dot"/>}<span className="side-branch-name">{text}</span>
+      {dropOn===b.name&&drag&&<span className="drop-hint">soltar: merge de {drag}</span>}
+      {cur&&s.merging&&conflicts.length>0&&<span className="conflict-badge">CONFLITO</span>}
+      {cur&&s.upstream&&(s.ahead>0||s.behind>0)&&<span className="sync-mini">{s.behind>0&&<><ArrowDown size={10}/>{s.behind}</>}{s.ahead>0&&<><ArrowUp size={10}/>{s.ahead}</>}</span>}
+    </button>
+    <span className="side-actions">
+      <button title={highlight===b.name?'Remover destaque':'Destacar no grafo'} onClick={()=>setHighlight(highlight===b.name?'all':b.name)}><Search size={12}/></button>
+      {!cur&&<button title={`Checkout de ${b.name}`} onClick={()=>openSwitch(b.name)} disabled={!!busy}><Laptop size={12}/></button>}
+      {!cur&&s.branch&&<button title={`Merge de ${b.name} em ${s.branch}`} onClick={()=>openMerge(b.name)} disabled={!!busy||!!s.merging}><GitMerge size={12}/></button>}
+    </span>
+  </div>;};
+
+  const pill=(l:Label,row:number)=>{const lane=layout.cols.get(l.sha)??0;const ref=l.local||l.remote;return <span key={l.key} {...(ref?dnd(ref):{})} className={`ref-pill ${l.current?'current':''} ${l.tag?'tag':''} ${ref&&dropOn===ref?'drop':''}`} style={{'--lane':color(lane)} as CSSProperties} title={[l.local&&`Local: ${l.local}`,l.remote&&`Remota: ${l.remote}`,l.tag&&`Tag: ${l.text}`,l.current&&'(branch atual · HEAD)'].filter(Boolean).join('\n')}
+    onDoubleClick={e=>{e.stopPropagation();if(l.local||l.remote)openSwitch(l.local||l.remote!);}} data-row={row}>
+    {l.current&&<Check size={11} className="pill-check"/>}
+    {l.tag?<Tag size={11}/>:null}
+    <span className="pill-text">{l.text}</span>
+    {l.local&&<Laptop size={11} className="pill-icon"/>}
+    {l.remote&&<Cloud size={11} className="pill-icon"/>}
+  </span>;};
+
+  const diffView=choice&&<div className="diff-view">
+    <div className="diff-head">
+      <button className="btn ghost" onClick={()=>setChoice(null)}><ArrowLeft size={14}/>Grafo</button>
+      <FileCode2 size={14}/><span className="diff-path" title={choice.path}>{choice.path}</span>
+      <span className={`diff-kind ${choice.conflicted?'conflict':''}`}>{choice.conflicted?'Em conflito':choice.sha?`Commit ${short(choice.sha)}`:choice.staged?'Preparado':'Não preparado'}</span>
+      {choice.conflicted&&<span className="diff-actions">
+        <button className="btn ours" disabled={!!busy} onClick={()=>resolve(choice.path,'ours')}>Usar a minha ({s.branch||'HEAD'})</button>
+        <button className="btn theirs" disabled={!!busy} onClick={()=>resolve(choice.path,'theirs')}>Usar a recebida</button>
+        <button className="btn primary" disabled={!!busy} onClick={()=>resolve(choice.path,'mark')}><Check size={13}/>Marcar resolvido</button>
+      </span>}
+    </div>
+    {choice.conflicted&&diff.includes('<<<<<<<')&&!rawConflict&&<><div className="conflict-help"><TriangleAlert size={14}/><span>Escolha, em cada trecho, a <b className="ours-t">sua versão</b> ({s.branch}), a <b className="theirs-t">recebida</b> ({s.merging?.source||'outra branch'}) ou as duas. Depois clique em <b>Salvar e marcar resolvido</b>. <button className="linkish" onClick={()=>setRawConflict(true)}>Ver arquivo bruto</button></span></div>
+      <ConflictEditor key={choice.path+diff.length} text={diff} ours={s.branch||'HEAD'} theirs={s.merging?.source||'recebida'} busy={!!busy} onSave={content=>resolve(choice.path,'content',content)}/></>}
+    {choice.conflicted&&(!diff.includes('<<<<<<<')||rawConflict)&&<div className="conflict-help"><TriangleAlert size={14}/><span>{rawConflict&&<><button className="linkish" onClick={()=>setRawConflict(false)}>Voltar à resolução por trechos</button>. </>}Trechos entre <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> e <code>=======</code> são a <b className="ours-t">sua versão</b>; entre <code>=======</code> e <code>&gt;&gt;&gt;&gt;&gt;&gt;&gt;</code>, a <b className="theirs-t">versão recebida</b>. Escolha um lado inteiro acima, ou edite o arquivo no seu editor, apague os marcadores, salve e clique em <b>Marcar resolvido</b>.</span></div>}
+    {!(choice.conflicted&&diff.includes('<<<<<<<')&&!rawConflict)&&<pre className="diff-code">{choice.conflicted?(()=>{let zone='';return diff.split('\n').map((line,i)=>{let cls=zone;if(/^<{7}( |$)/.test(line)){zone='ours';cls='marker ours';}else if(/^={7}$/.test(line)&&zone){zone='theirs';cls='marker';}else if(/^>{7}( |$)/.test(line)){zone='';cls='marker theirs';}else if(/^\|{7}( |$)/.test(line)){zone='base';cls='marker';}return <span key={i} className={`dl ${cls}`}><span className="ln">{i+1}</span>{line||' '}</span>;});})()
+      :diff.split('\n').map((line,i)=><span className={`dl ${line.startsWith('+')&&!line.startsWith('+++')?'add':line.startsWith('-')&&!line.startsWith('---')?'del':line.startsWith('@@')?'hunk':/^(diff|index|---|\+\+\+) /.test(line)?'meta':''}`} key={i}>{line||' '}</span>)}</pre>}
+  </div>;
+
+  const fileRow=(f:FileState,kind:'unstaged'|'staged')=>{const st=statusLetter(f,kind==='staged');const [dir,name]=splitPath(f.path);const active=choice&&!choice.sha&&choice.path===f.path&&choice.staged===(kind==='staged');return <div key={kind+f.path} className={`file-row ${active?'active':''}`}>
+    <span className={`st ${st.cls}`} title={st.title}>{st.letter}</span>
+    <button className="file-name" title={f.oldPath?`${f.oldPath} → ${f.path}`:f.path} onClick={()=>setChoice({path:f.path,staged:kind==='staged'})}><span className="fn">{name}</span><span className="fd">{dir}</span></button>
+    {kind==='unstaged'
+      ?<button className="file-act stage" disabled={!!busy} onClick={()=>action('stage',{paths:[f.path]},'Arquivo preparado.')}>Stage</button>
+      :<button className="file-act unstage" disabled={!!busy} onClick={()=>action('unstage',{paths:[f.path]},'Arquivo retirado.')}>Unstage</button>}
+  </div>;};
+
+  const wipPanel=<div className="panel-body">
+    <div className="panel-title"><Pencil size={14}/><span>{s.files.length} {s.files.length===1?'alteração':'alterações'} em <b>{s.branch||'HEAD destacado'}</b></span></div>
+    {s.merging&&<div className="merge-box"><div className="merge-box-title"><GitMerge size={14}/>Merge em andamento</div><p>{subject(s.merging.message)}</p><p className="muted">{conflicts.length?`${conflicts.length} ${conflicts.length===1?'arquivo em conflito':'arquivos em conflito'}. Resolva todos para concluir.`:'Todos os conflitos resolvidos. Escreva a mensagem e conclua o merge.'}</p><button className="btn danger" disabled={!!busy} onClick={()=>action('merge-abort',{},'Merge abortado. Branch restaurada.')}><X size={13}/>Abortar merge</button></div>}
+    {conflicts.length>0&&<div className="file-group conflict-group"><div className="group-head"><TriangleAlert size={13}/>Conflitos<span className="count">{conflicts.length}</span></div>{conflicts.map(f=>{const [dir,name]=splitPath(f.path);return <div key={'c'+f.path} className={`file-row ${choice?.conflicted&&choice.path===f.path?'active':''}`}><span className="st st-conflict">!</span><button className="file-name" title={f.path} onClick={()=>setChoice({path:f.path,staged:false,conflicted:true})}><span className="fn">{name}</span><span className="fd">{dir}</span></button><button className="file-act" onClick={()=>setChoice({path:f.path,staged:false,conflicted:true})}>Resolver</button></div>;})}</div>}
+    <div className="file-group"><div className="group-head">Unstaged<span className="count">{unstaged.length}</span>{unstaged.length>0&&<button className="group-act stage" disabled={!!busy} onClick={()=>action('stage',{paths:unstaged.map(f=>f.path)},'Todos os arquivos preparados.')}>Stage all</button>}</div>{unstaged.length?unstaged.map(f=>fileRow(f,'unstaged')):<p className="files-empty">Nada pendente.</p>}</div>
+    <div className="file-group"><div className="group-head">Staged<span className="count">{staged.length}</span>{staged.length>0&&<button className="group-act unstage" disabled={!!busy} onClick={()=>action('unstage',{paths:staged.map(f=>f.path)},'Todos os arquivos retirados.')}>Unstage all</button>}</div>{staged.length?staged.map(f=>fileRow(f,'staged')):<p className="files-empty">Use Stage para incluir arquivos no commit.</p>}</div>
+    <div className="commit-box"><input placeholder={s.merging?'Mensagem do merge':'Resumo do commit'} value={message} maxLength={300} onChange={e=>setMessage(e.target.value)} aria-label="Resumo do commit"/><textarea placeholder="Descrição (opcional)" rows={3} value={description} maxLength={9500} onChange={e=>setDescription(e.target.value)} aria-label="Descrição do commit"/>
+      <button className="btn primary wide" disabled={!!busy||(!staged.length&&!s.merging)||!message.trim()||s.conflicted||!s.branch} onClick={commit}>{busy==='commit'?'Criando commit…':s.merging?(s.conflicted?'Resolva os conflitos primeiro':'Concluir merge'):staged.length?`Commit de ${staged.length} ${staged.length===1?'arquivo':'arquivos'}`:'Prepare arquivos para commitar'}</button>
+      {!s.branch&&<p className="muted small">HEAD destacado: crie uma branch antes de commitar.</p>}</div>
+  </div>;
+
+  const commitPanel=shownCommit&&<div className="panel-body">
+    <div className="commit-head"><div className="commit-sha"><span>{shownCommit.parents.length>1?'merge':'commit'}:</span><button title="Copiar hash" onClick={()=>copy(shownCommit.sha)}><code>{short(shownCommit.sha)}</code><Copy size={11}/></button></div><h2>{subject(shownCommit.message)}</h2>{shownCommit.message.includes('\n')&&<p className="commit-body">{shownCommit.message.split('\n').slice(1).join('\n').trim()}</p>}
+      <div className="author-line"><span className="avatar" style={{'--lane':color(layout.cols.get(shownCommit.sha)||0)} as CSSProperties}>{initials(shownCommit.author)}</span><div><b>{shownCommit.author}</b><span>{fmt(shownCommit.date,true)}</span></div></div>
+      <div className="parents">pais: {shownCommit.parents.length?shownCommit.parents.map(p=><button key={p} disabled={!layout.cols.has(p)} onClick={()=>select(p,true)}><code>{short(p)}</code></button>):<span className="muted">nenhum (commit inicial)</span>}</div>
+      {(labels.get(shownCommit.sha)||[]).length>0&&<div className="commit-refs">{(labels.get(shownCommit.sha)||[]).map(l=><div key={l.key} className="commit-ref">{pill(l,-1)}{!l.tag&&!l.current&&<><button className="btn ghost xs" disabled={!!busy} onClick={()=>openSwitch(l.local||l.remote!)}>Checkout</button>{s.branch&&<button className="btn ghost xs" disabled={!!busy} onClick={()=>openMerge(l.local||l.remote!)}>Merge em {s.branch}</button>}</>}</div>)}</div>}
+      <div className="commit-actions"><button className="btn ghost sm" disabled={!!busy} onClick={()=>openBranch(true)}><GitBranchPlus size={13}/>Criar branch aqui</button></div>
+    </div>
+    <div className="tabs"><button className={tab==='files'?'on':''} onClick={()=>setTab('files')}>Arquivos{commitFiles&&!commitFiles.merge&&<span className="count">{commitFiles.files.length}</span>}</button><button className={tab==='info'?'on':''} onClick={()=>setTab('info')}>Detalhes</button></div>
+    {tab==='files'?<div className="file-group">{!commitFiles?<p className="files-empty">Carregando…</p>:commitFiles.merge?<p className="files-empty">Commit de merge. Selecione um dos pais para ver as alterações.</p>:commitFiles.files.map(f=>{const [dir,name]=splitPath(f.path);return <div key={f.path} className={`file-row ${choice?.sha===shownCommit.sha&&choice.path===f.path?'active':''}`}><span className="st st-mod">M</span><button className="file-name" title={f.path} onClick={()=>setChoice({path:f.path,staged:false,sha:shownCommit.sha})}><span className="fn">{name}</span><span className="fd">{dir}</span></button><span className="numstat">{f.binary?'bin':<><b className="plus">+{f.additions}</b><b className="minus">−{f.deletions}</b></>}</span></div>;})}</div>
+    :<div className="info-grid"><span>Hash</span><code>{shownCommit.sha}</code><span>Autor</span><span>{shownCommit.author}</span><span>Data</span><span>{fmt(shownCommit.date,true)}</span><span>Pais</span><span>{shownCommit.parents.map(short).join(', ')||'—'}</span></div>}
+  </div>;
+
+  const nonCurrentBranches=allBranches.filter(b=>b.name!==(into||s.branch));
+  const pushCmd=s.upstream&&s.remote&&s.remote!=='.'?`git push ${s.remote} ${s.branch}`:`git push -u ${s.remotes.includes('origin')?'origin':s.remotes[0]||'origin'} ${s.branch}`;
+
+  return <div className="app">
+    <header className="toolbar">
+      {brand}
+      <div className="repo-switch"><button className="crumb" onClick={()=>setDialog('repo')} disabled={!!busy} title={s.root}><span className="crumb-label">repositório</span><span className="crumb-value"><FolderGit2 size={13}/>{h.repository}<ChevronDown size={12}/></span></button>
+        <div className={`crumb ${s.branch&&dropOn===s.branch?'drop':''}`} {...(s.branch?dnd(s.branch,false):{})} title="Solte uma branch aqui para fazer merge na branch atual"><span className="crumb-label">branch</span><span className="crumb-value branch-select"><GitBranch size={13}/><select aria-label="Trocar de branch" value={s.branch||''} disabled={!!busy} onChange={e=>openSwitch(e.target.value)}>{!s.branch&&<option value="">HEAD destacado</option>}<optgroup label="Local">{localBranches.map(b=><option key={b.name} value={b.name}>{b.name}</option>)}</optgroup>{remoteBranches.length>0&&<optgroup label="Remota">{remoteBranches.map(b=><option key={b.name} value={b.name}>{b.name}</option>)}</optgroup>}</select></span></div>
+      </div>
+      <div className="tools">
+        {toolButton(<ArrowDownToLine size={18}/>,'Pull',openPull,{badge:s.behind,disabled:!s.remotes.length,title:s.upstream?`Trazer commits de ${s.upstream}`:'A branch não acompanha um remoto'})}
+        {toolButton(<ArrowUpToLine size={18}/>,'Push',()=>setDialog('push'),{badge:s.ahead,disabled:!s.remotes.length||!s.branch,title:'Enviar commits ao remoto'})}
+        {toolButton(<RefreshCw size={18} className={busy==='fetch'?'spinning':''}/>,'Fetch',()=>action('fetch',{},'Referências remotas atualizadas.'),{disabled:!s.remotes.length,title:'git fetch --prune'})}
+        <span className="tool-sep"/>
+        {toolButton(<GitBranchPlus size={18}/>,'Branch',()=>openBranch(false),{disabled:!s.head})}
+        {toolButton(<GitMerge size={18}/>,'Merge',()=>openMerge(),{disabled:!s.branch||!!s.merging})}
+      </div>
+      <div className="toolbar-right">
+        <button className="icon-btn" title="Recarregar estado" onClick={()=>refresh()} disabled={!!busy}><RefreshCw size={15}/></button>
+        <button className="icon-btn" title="Operações Git desta sessão" onClick={()=>setDialog('operations')}><Terminal size={15}/>{s.audit.length>0&&<span className="dot-count">{s.audit.length}</span>}</button>
+        <button className="icon-btn" title="Ajuda" onClick={()=>setDialog('help')}><CircleHelp size={15}/></button>
+      </div>
+    </header>
+
+    <div className="body">
+      <aside className="sidebar">
+        <label className="side-filter"><Search size={12}/><input placeholder="Filtrar branches" value={sideFilter} onChange={e=>setSideFilter(e.target.value)}/></label>
+        <div className="side-scroll">
+          {sideSection('local',<><Laptop size={13}/>LOCAL</>,localBranches.length,localBranches.filter(b=>b.name.toLocaleLowerCase().includes(sf)).map(branchItem))}
+          {sideSection('remote',<><Cloud size={13}/>REMOTE</>,remoteBranches.length,remotesGrouped.map(g=><div key={g.remote} className="remote-group"><button className="remote-name" onClick={()=>setCollapsed(c=>({...c,['r:'+g.remote]:!c['r:'+g.remote]}))}>{collapsed['r:'+g.remote]?<ChevronRight size={12}/>:<ChevronDown size={12}/>}<Cloud size={12}/>{g.remote}</button>{!collapsed['r:'+g.remote]&&g.list.map(branchItem)}</div>))}
+          {sideSection('tags',<><Tag size={13}/>TAGS</>,s.tags.length,s.tags.filter(t=>t.name.toLocaleLowerCase().includes(sf)).map(t=><button key={t.name} className="side-tag" onClick={()=>{if(layout.cols.has(t.sha))select(t.sha,true);}}><Tag size={11}/>{t.name}</button>))}
+        </div>
+        <div className="side-foot"><span className={`work-state ${s.files.length?'dirty':'clean'}`}><span/>{s.files.length?`${s.files.length} ${s.files.length===1?'alteração':'alterações'} não commitadas`:'Área de trabalho limpa'}</span></div>
+      </aside>
+
+      <main className="center">
+        {s.merging&&<div className={`merge-banner ${conflicts.length?'has-conflicts':'ready'}`}><span className="pulse"/><GitMerge size={15}/><span><b>{conflicts.length?'Conflito no merge':'Conflitos resolvidos'}</b> — {s.merging.source?<>{s.merging.source} → {s.branch}</>:subject(s.merging.message)}. {conflicts.length?`${conflicts.length} ${conflicts.length===1?'arquivo esperando':'arquivos esperando'} resolução. O repositório fica assim até alguém resolver ou abortar.`:'Escreva a mensagem no painel à direita e clique em Concluir merge.'}</span><button className="btn ghost sm" onClick={()=>{setSelected(WIP);if(conflicts[0])setChoice({path:conflicts[0].path,staged:false,conflicted:true});}}>Ver conflitos</button><button className="btn danger sm" disabled={!!busy} onClick={()=>action('merge-abort',{},'Merge abortado.')}>Abortar</button></div>}
+        {diffView||<>
+          <div className="graph-bar">
+            <label className="search"><Search size={13}/><input ref={search} placeholder="Buscar commits (mensagem, autor, hash)" value={query} onChange={e=>setQuery(e.target.value)}/>{query?<button onClick={()=>setQuery('')} aria-label="Limpar busca"><X size={12}/></button>:<kbd>/</kbd>}</label>
+            <select aria-label="Destacar branch" value={highlight} onChange={e=>setHighlight(e.target.value)}><option value="all">Destacar: todas</option>{allBranches.map(b=><option key={b.name} value={b.name}>{b.name}</option>)}</select>
+            <select aria-label="Filtrar autor" value={author} onChange={e=>setAuthor(e.target.value)}><option value="all">Todos os autores</option>{authors.map(a=><option key={a}>{a}</option>)}</select>
+            {filtering&&<button className="btn ghost sm" onClick={reset}><X size={12}/>Limpar</button>}
+            <span className="grow"/>
+            <span className="muted small">{realCommits.length} commits</span>
+            <div className="zoom"><button aria-label="Diminuir" disabled={zoom<=.75} onClick={()=>setZoom(z=>Math.max(.75,z-.125))}><Minus size={12}/></button><span>{Math.round(zoom*100)}%</span><button aria-label="Aumentar" disabled={zoom>=1.5} onClick={()=>setZoom(z=>Math.min(1.5,z+.125))}><Plus size={12}/></button><button aria-label="Ir ao topo" onClick={()=>{setZoom(1);scroll.current?.scrollTo({top:0});}}><Maximize2 size={12}/></button></div>
+          </div>
+          <div className="graph-head" style={{gridTemplateColumns:`${refW}px ${graphW}px minmax(200px,1fr) 150px 120px 76px`}}><span>BRANCH / TAG</span><span>GRAFO</span><span>MENSAGEM DO COMMIT</span><span>AUTOR</span><span>DATA</span><span>HASH</span></div>
+          <div className="graph-scroll" ref={scroll} tabIndex={0} aria-label="Histórico de commits">
+            {!rows.length&&<div className="empty"><GitCommitHorizontal size={26}/><b>Nenhum commit ainda.</b><p>Prepare arquivos e faça o primeiro commit.</p></div>}
+            <div className="graph-stage" style={{height:rows.length*rowH}}>
+              {rows.map((c,i)=>{const lane=layout.cols.get(c.sha)||0;const isWip=c.sha===WIP;const sel=isWip?showWip:c.sha===shownCommit?.sha;const ls=labels.get(c.sha)||[];const isHead=c.sha===s.head;return <div key={c.sha} data-sha={c.sha} role="button" tabIndex={-1}
+                className={`row ${sel?'selected':''} ${matches.has(c.sha)?'':'dim'} ${headChain.has(c.sha)?'on-head':''} ${isWip?'wip':''}`}
+                style={{top:i*rowH,height:rowH,gridTemplateColumns:`${refW}px ${graphW}px minmax(200px,1fr) 150px 120px 76px`,'--lane':color(lane)} as CSSProperties}
+                onClick={()=>select(c.sha)}>
+                <span className={`refs ${ls.length>1?'multi':''}`}>{isWip?<span className="ref-pill wip-pill" style={{'--lane':color(lane)} as CSSProperties}><Pencil size={11}/><span className="pill-text">WIP</span></span>:<>{ls.slice(0,1).map(l=>pill(l,i))}{ls.length>1&&<span className="more">+{ls.length-1}</span>}
+                  {ls.length>1&&<span className={`refs-pop ${i>=4&&i>=rows.length-4?'up':''}`} onClick={e=>e.stopPropagation()} onDoubleClick={e=>e.stopPropagation()}>
+                    <span className="refs-pop-title">{ls.length} referências neste commit · clique para fazer checkout</span>
+                    {ls.map(l=>{const ref=l.local||l.remote;return <button key={l.key} type="button" {...(ref?dnd(ref):{})} className={`refs-pop-item ${l.current?'current':''}`} disabled={!!busy||l.current} style={{'--lane':color(lane)} as CSSProperties}
+                      title={ref?(l.current?`${l.text} é a branch atual`:`Checkout de ${ref} · arraste sobre outra branch para fazer merge`):`Tag ${l.text}`}
+                      onClick={()=>{if(ref)void openSwitch(ref);else select(l.sha,true);}}>
+                      {l.current?<Check size={12}/>:l.tag?<Tag size={12}/>:l.local?<Laptop size={12}/>:<Cloud size={12}/>}
+                      <span className="refs-pop-name">{l.text}</span>
+                      {l.local&&l.remote&&<Cloud size={11} className="muted"/>}
+                      <span className="refs-pop-act">{l.current?'atual':ref?'checkout':'tag'}</span>
+                    </button>;})}
+                  </span>}</>}{(ls.length>0||isWip)&&<span className="ref-line"/>}</span>
+                <span/>
+                <span className="msg">{isWip?<span className="wip-msg">// WIP <span className="muted">{s.merging?'merge em andamento · ':''}{s.files.length} {s.files.length===1?'arquivo':'arquivos'}</span>{conflicts.length>0&&<span className="wip-conflict"><TriangleAlert size={11}/>{conflicts.length} em conflito</span>}</span>:<>{isHead&&<span className="head-tag">HEAD</span>}<span className="subject">{subject(c.message)}</span></>}</span>
+                <span className="author">{!isWip&&c.author}</span>
+                <span className="date">{!isWip&&fmt(c.date)}</span>
+                <code className="sha">{!isWip&&short(c.sha)}</code>
+              </div>;})}
+              <svg className="graph-svg" width={graphW} height={rows.length*rowH} style={{left:refW}} aria-hidden="true">
+                {rows.map((c,i)=>(labels.get(c.sha)?.length||c.sha===WIP)?<line key={'l'+c.sha} x1={0} x2={gx(layout.cols.get(c.sha)||0)} y1={gy(i)} y2={gy(i)} stroke={color(layout.cols.get(c.sha)||0)} strokeWidth="1.5" opacity={matches.has(c.sha)?.7:.15} strokeDasharray={c.sha===WIP?'3 3':undefined}/>:null)}
+                {layout.edges.map((e,k)=>{const x1=gx(e.fromCol),y1=gy(e.fromRow),xv=gx(e.via),x2=gx(e.toCol),y2=e.dangling?y1+rowH*.8:gy(e.toRow);const R=rowH;let d=`M ${x1} ${y1}`;
+                  if(e.toRow-e.fromRow<=1&&!e.dangling&&(x1!==x2))d+=` C ${x1} ${y1+R*.6}, ${x2} ${y2-R*.6}, ${x2} ${y2}`;
+                  else{let cy=y1;if(xv!==x1){d+=` C ${x1} ${y1+R*.6}, ${xv} ${y1+R*.4}, ${xv} ${y1+R}`;cy=y1+R;}
+                    if(xv!==x2){if(y2-R>cy)d+=` L ${xv} ${y2-R}`;d+=` C ${xv} ${y2-R*.4}, ${x2} ${y2-R*.6}, ${x2} ${y2}`;}else d+=` L ${x2} ${y2}`;}
+                  const from=rows[e.fromRow];const thick=headChain.has(from.sha)&&e.via===e.fromCol&&from.parents[0]===rows[e.toRow]?.sha;
+                  const vis=!filtering||matches.has(from.sha);
+                  return <path key={k} d={d} fill="none" stroke={color(e.via)} strokeWidth={thick?3.2:2} strokeLinecap="round" strokeDasharray={e.dashed?'4 4':undefined} opacity={vis?(thick?1:.85):.15}/>;})}
+                {rows.map((c,i)=>{const col=layout.cols.get(c.sha)||0,cx=gx(col),cy=gy(i),cl=color(col);const sel=c.sha===WIP?showWip:c.sha===shownCommit?.sha;const op=matches.has(c.sha)?1:.25;const r=Math.round(9*Math.min(zoom,1.2));
+                  if(c.sha===WIP)return <g key={c.sha} opacity={op}><circle cx={cx} cy={cy} r={r} fill="var(--bg)" stroke={cl} strokeWidth="2" strokeDasharray="3 2.5"/>{sel&&<circle cx={cx} cy={cy} r={r+4} fill="none" stroke={cl} strokeOpacity=".4" strokeWidth="2"/>}</g>;
+                  if(c.parents.length>1)return <g key={c.sha} opacity={op}>{sel&&<circle cx={cx} cy={cy} r={r} fill={cl} opacity=".25"/>}<circle cx={cx} cy={cy} r={4.5} fill={cl} stroke="var(--bg)" strokeWidth="1.5"/></g>;
+                  return <g key={c.sha} opacity={op}>{sel&&<circle cx={cx} cy={cy} r={r+4} fill="none" stroke={cl} strokeOpacity=".45" strokeWidth="2.5"/>}<circle cx={cx} cy={cy} r={r} fill={c.sha===s.head?cl:'var(--node)'} stroke={cl} strokeWidth="2"/><text x={cx} y={cy+3.2} textAnchor="middle" fontSize={Math.round(8*Math.min(zoom,1.2))} fontWeight="700" fill={c.sha===s.head?'#0d1116':cl}>{initials(c.author)}</text></g>;})}
+              </svg>
+            </div>
+          </div>
+        </>}
+      </main>
+
+      <aside className="panel">{showWip?wipPanel:commitPanel||<div className="panel-empty"><GitCommitHorizontal size={26}/><p>Selecione um commit.</p></div>}</aside>
+    </div>
+
+    <footer className="statusbar"><span title={s.root}><FolderGit2 size={12}/>{s.root}</span><span>{s.upstream?<>↑{s.ahead} ↓{s.behind} · {s.upstream}</>:'sem upstream'}</span><span>{s.lastFetch?`último fetch ${fmt(s.lastFetch,true)}`:'fetch ainda não executado'}</span><span className="grow"/><span>{updated?`atualizado ${new Date(updated).toLocaleTimeString('pt-BR')}`:''}</span><span><LockKeyhole size={11}/>local</span></footer>
+
+    {dialog&&<div className="backdrop" onMouseDown={e=>{if(e.target===e.currentTarget&&!busy)setDialog(null);}}><div className="modal" ref={modal} role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <button className="modal-close icon-btn" aria-label="Fechar" disabled={!!busy} onClick={()=>setDialog(null)}><X size={16}/></button>
+      {dialog==='branch'&&<form onSubmit={runBranch}><h2 id="dialog-title"><GitBranchPlus size={17}/>Nova branch</h2><label className="field"><span>Nome</span><input data-autofocus value={branchName} onChange={e=>setBranchName(e.target.value.replace(/\s/g,'-'))} placeholder="feature/minha-tarefa" spellCheck={false} autoComplete="off"/></label>
+        <div className="field"><span>A partir de</span><label className="radio"><input type="radio" checked={branchFrom==='head'} onChange={()=>setBranchFrom('head')}/><span>HEAD atual {s.branch&&<b>({s.branch} · {short(s.head||'')})</b>}</span></label>{shownCommit&&shownCommit.sha!==s.head&&<label className="radio"><input type="radio" checked={branchFrom==='selected'} onChange={()=>setBranchFrom('selected')}/><span>Commit selecionado <b>{short(shownCommit.sha)}</b> <span className="muted">{subject(shownCommit.message).slice(0,40)}</span></span></label>}</div>
+        <label className="check"><input type="checkbox" checked={branchCheckout} onChange={e=>setBranchCheckout(e.target.checked)}/>Fazer checkout da nova branch</label>
+        <pre className="cmd">{branchCheckout?`git switch -c ${branchName||'<nome>'}`:`git branch ${branchName||'<nome>'}`} {branchFrom==='selected'&&shownCommit?short(shownCommit.sha):''}</pre>
+        <div className="modal-actions"><button type="button" className="btn ghost" onClick={()=>setDialog(null)} disabled={!!busy}>Cancelar</button><button className="btn primary" type="submit" disabled={!!busy||!branchName.trim()}>{busy==='branch'?'Criando…':'Criar branch'}</button></div></form>}
+      {dialog==='merge'&&<><h2 id="dialog-title"><GitMerge size={17}/>Merge em <span className="hl">{into||s.branch}</span></h2><label className="field"><span>Trazer as alterações de</span><select data-autofocus value={target} onChange={e=>setTarget(e.target.value)}><optgroup label="Local">{nonCurrentBranches.filter(b=>!b.remote).map(b=><option key={b.name} value={b.name}>{b.name}</option>)}</optgroup><optgroup label="Remota">{nonCurrentBranches.filter(b=>b.remote).map(b=><option key={b.name} value={b.name}>{b.name}</option>)}</optgroup></select></label>
+        <div className="merge-flow"><span className="ref-pill" style={{'--lane':color(laneOfBranch(allBranches.find(b=>b.name===target)?.sha||'')??3)} as CSSProperties}><span className="pill-text">{target||'?'}</span></span><ChevronRight size={14}/><span className="ref-pill current" style={{'--lane':color(0)} as CSSProperties}><Check size={11} className="pill-check"/><span className="pill-text">{into||s.branch}</span></span></div>
+        {preview?.needsCheckout&&<p className="note"><Laptop size={13}/>O Briar faz checkout de <b>{preview.into}</b> antes do merge.</p>}
+        {preview?.intoRemote&&<p className="note"><Cloud size={13}/>{into} é remota: o merge acontece na branch local <b>{preview.into}</b>. Depois use <b>Push</b> para publicar.</p>}
+        <div className="preview">{previewError?<div className="inline-error">{previewError}</div>:!preview?<p className="muted">Analisando…</p>:preview.incoming===0?<p className="ok"><Check size={14}/>{preview.into} já contém todos os commits de {preview.branch}. Nada a integrar.</p>:preview.fastForward?<p className="ok"><Check size={14}/>{preview.incoming} {preview.incoming===1?'commit':'commits'} · fast-forward, sem conflitos.</p>:preview.conflicts.length?<><p className="warn"><TriangleAlert size={14}/>{preview.incoming} {preview.incoming===1?'commit':'commits'} · <b>conflitos previstos em {preview.conflicts.length} {preview.conflicts.length===1?'arquivo':'arquivos'}</b>:</p><ul className="conflict-list">{preview.conflicts.map(f=><li key={f}><code>{f}</code></li>)}</ul><p className="muted small">Você poderá resolvê-los aqui depois do merge, ou abortar.</p></>:<p className="ok"><Check size={14}/>{preview.incoming} {preview.incoming===1?'commit':'commits'} · merge automático, sem conflitos previstos.</p>}</div>
+        {s.files.some(f=>!f.untracked)&&<div className="inline-error">Faça commit das alterações locais antes do merge.</div>}
+        <pre className="cmd">{preview?.needsCheckout?`git switch ${preview.into}\n`:''}git merge --no-edit {target}</pre>
+        <div className="modal-actions"><button className="btn ghost" onClick={()=>setDialog(null)} disabled={!!busy}>Cancelar</button><button className="btn primary" disabled={!!busy||!target||!!previewError||s.files.some(f=>!f.untracked)||preview?.incoming===0} onClick={runMerge}>{busy==='merge'?'Integrando…':preview?.conflicts.length?'Fazer merge e resolver conflitos':'Fazer merge'}</button></div></>}
+      {dialog==='push'&&<><h2 id="dialog-title"><ArrowUpToLine size={17}/>Push de <span className="hl">{s.branch}</span></h2><p className="modal-text">{!s.upstream?`A branch ainda não existe no remoto. Ela será criada e passará a ser acompanhada (upstream).`:s.ahead?`${s.ahead} ${s.ahead===1?'commit será enviado':'commits serão enviados'} para ${s.upstream}.`:`Nenhum commit local novo em relação a ${s.upstream} (desde o último fetch).`}</p>{s.behind>0&&<div className="inline-error">O remoto tem {s.behind} {s.behind===1?'commit':'commits'} que você não tem. Faça pull primeiro.</div>}<pre className="cmd">{pushCmd}</pre><p className="muted small">Usa a autenticação Git/SSH já configurada no computador. Nunca faz force push.</p><div className="modal-actions"><button className="btn ghost" onClick={()=>setDialog(null)} disabled={!!busy}>Cancelar</button><button className="btn primary" data-autofocus disabled={!!busy||s.behind>0} onClick={runPush}>{busy==='push'?'Enviando…':'Push'}</button></div></>}
+      {dialog==='pull'&&<><h2 id="dialog-title"><ArrowDownToLine size={17}/>Pull em <span className="hl">{s.branch}</span></h2><p className="modal-text">{!s.upstream?'Esta branch não acompanha um remoto. Faça push primeiro.':s.ahead&&s.behind?`Históricos divergentes: ${s.ahead} commits locais e ${s.behind} remotos. É preciso um merge.`:s.behind?`${s.behind} ${s.behind===1?'commit remoto':'commits remotos'} para trazer de ${s.upstream}.`:`Nada novo conhecido em ${s.upstream}. O pull também consulta o remoto.`}</p>
+        <label className="radio"><input type="radio" checked={pullMode==='ff'} onChange={()=>setPullMode('ff')}/><span><b>Somente fast-forward</b> <span className="muted">— seguro, falha se houver divergência</span></span></label>
+        <label className="radio"><input type="radio" checked={pullMode==='merge'} onChange={()=>setPullMode('merge')}/><span><b>Pull com merge</b> <span className="muted">— integra commits divergentes; pode gerar conflitos</span></span></label>
+        {s.files.some(f=>!f.untracked)&&<div className="inline-error">Faça commit das alterações locais antes do pull.</div>}
+        <pre className="cmd">{pullMode==='ff'?'git pull --ff-only':'git pull --no-rebase --no-edit'}</pre>
+        <div className="modal-actions"><button className="btn ghost" onClick={()=>setDialog(null)} disabled={!!busy}>Cancelar</button><button className="btn primary" data-autofocus disabled={!!busy||!s.upstream||s.files.some(f=>!f.untracked)} onClick={runPull}>{busy==='pull'?'Atualizando…':'Pull'}</button></div></>}
+      {dialog==='repo'&&<><h2 id="dialog-title"><FolderGit2 size={17}/>Abrir outro repositório</h2>{connectionForm}</>}
+      {dialog==='operations'&&<><h2 id="dialog-title"><Terminal size={17}/>Operações Git desta sessão</h2><div className="audit">{s.audit.length?s.audit.map((a,i)=><div className="audit-entry" key={a.date+i}><span className={a.success?'plus':'minus'}>{a.success?'ok':'falhou'} · {new Date(a.date).toLocaleTimeString('pt-BR')}</span><code>{a.command}</code>{a.output&&<pre>{a.output}</pre>}</div>):<p className="muted">Nenhuma operação executada ainda.</p>}</div></>}
+      {dialog==='help'&&<><h2 id="dialog-title"><CircleHelp size={17}/>Como usar</h2><div className="help"><p><b>Grafo:</b> cada coluna é uma linha de desenvolvimento. A branch atual fica na primeira coluna, com traço mais grosso e rótulo destacado com <Check size={11}/>. <Laptop size={11}/> = local, <Cloud size={11}/> = remota.</p><p><b>// WIP:</b> linha no topo com seus arquivos ainda não commitados. Clique nela para fazer stage e commit no painel à direita.</p><p><b>Branches:</b> clique para localizar no grafo; duplo clique faz checkout (se a branch local já existe, o Briar troca para ela e a atualiza com o remoto). <b>Arraste uma branch sobre outra</b> (na lateral, no grafo ou no seletor de branch do topo) para abrir o merge.</p><p><b>Merge:</b> mostra antes quais arquivos terão conflito. Se houver, cada arquivo aparece em "Conflitos" e o aviso vermelho fica no topo até alguém resolver: escolha trecho a trecho a sua versão, a recebida ou as duas, ou edite no editor e marque como resolvido. Depois clique em <b>Concluir merge</b> — ou <b>Abortar</b> para voltar ao estado anterior.</p><p><b>Pull / Push / Fetch:</b> usam a autenticação Git já configurada. Nunca há force push.</p><p><kbd>/</kbd> busca · <kbd>↑</kbd><kbd>↓</kbd> navegam · <kbd>esc</kbd> fecha.</p></div></>}
+      {error&&<div className="inline-error" role="alert">{error}<button aria-label="Dispensar" onClick={()=>setError('')}><X size={13}/></button></div>}
+    </div></div>}
+    {error&&!dialog&&<div className="error-toast" role="alert"><CircleAlert size={15}/><span>{error}</span><button aria-label="Dispensar erro" onClick={()=>setError('')}><X size={14}/></button></div>}
+    {toast&&<div className="toast" role="status"><Check size={15}/>{toast}</div>}
+  </div>;
+}
