@@ -1,16 +1,48 @@
 name: Instaladores
 
+# Todo push na main vira uma Release nova, com a versão calculada sozinha (scripts/next-version.mjs):
+# última tag + 1 no patch, ou a versão do package.json se ela for maior.
+# Para não gerar Release num push, ponha [skip ci] na mensagem do commit.
 on:
-  workflow_dispatch:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths-ignore: ['**/*.md', 'LICENSE', '.gitignore']
+  workflow_dispatch:
 
-# Necessário para o action-gh-release criar a Release com o GITHUB_TOKEN
+# Necessário para criar a Release (e a tag dela) com o GITHUB_TOKEN
 permissions:
   contents: write
 
+# Um release por vez: dois pushes seguidos geram 0.6.3 e depois 0.6.4, sem disputar o número.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  GH_REPO: ${{ github.repository }}
+
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # precisa das tags
+      - id: next
+        run: echo "version=$(node scripts/next-version.mjs)" >> "$GITHUB_OUTPUT"
+      # A Release nasce como rascunho e só é publicada (criando a tag) quando todos os instaladores
+      # subirem: assim o app nunca vê uma "Latest" sem os arquivos de atualização.
+      - env:
+          V: ${{ steps.next.outputs.version }}
+        run: |
+          gh release delete "v$V" --yes 2>/dev/null || true # rascunho que sobrou de um build que falhou
+          gh release create "v$V" --draft --target "$GITHUB_SHA" --title "Briar $V" --generate-notes
+
   build:
+    needs: version
     strategy:
       matrix:
         include:
@@ -28,26 +60,32 @@ jobs:
               release/*.deb
               release/latest-linux.yml
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      V: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      # A versão do package.json é a que vai no instalador e no latest*.yml lido pelo atualizador:
-      # se não bater com a tag, os clientes não enxergam a versão nova.
-      - if: startsWith(github.ref, 'refs/tags/')
-        run: node -e "const v=require('./package.json').version,t=process.env.GITHUB_REF_NAME;if(t!=='v'+v){console.error('Tag '+t+' nao bate com package.json ('+v+'). Rode npm version antes de criar a tag.');process.exit(1)}"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
+      # A versão do instalador e do latest*.yml é a da Release; o package.json do repositório não muda.
+      - run: npm version "$V" --no-git-tag-version --allow-same-version
       - run: npm test
       - run: npm run ${{ matrix.script }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/upload-artifact@v4
         with:
           name: briar-${{ matrix.os }}
           path: ${{ matrix.files }}
-      - if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ matrix.files }}
+      - env:
+          FILES: ${{ matrix.files }}
+        run: gh release upload "v$V" $FILES --clobber
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh release edit "v${{ needs.version.outputs.version }}" --draft=false --latest

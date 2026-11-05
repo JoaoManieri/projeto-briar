@@ -98,16 +98,18 @@ Estrutura:
 
 Os links de download e a atualização automática usam sempre a Release mais recente do repositório `JoaoManieri/projeto-briar`.
 
-A versão em `package.json` precisa ser a mesma da tag. O app compara a versão dele com a da Release: se a tag for `v0.4.1` e o `package.json` disser `0.4.0`, o app instalado vai se achar desatualizado para sempre.
+**É automático: todo push na `main` publica uma versão nova.** O workflow **Instaladores** (`.github/workflows/build.yml`) faz o seguinte:
 
-O jeito mais simples (o workflow descrito abaixo gera e publica tudo):
+1. Calcula a versão com `scripts/next-version.mjs`. Normalmente é a última tag mais 1 no patch (`v0.6.2` → `0.6.3`).
+2. Gera os instaladores de Windows e Linux com essa versão.
+3. Publica a Release `vX.Y.Z` com os instaladores e os arquivos da atualização automática. A tag é criada nesse momento.
 
-```bash
-npm version patch          # 0.4.0 → 0.4.1: altera package.json, faz commit e cria a tag v0.4.1
-git push --follow-tags
-```
+- **Subir minor ou major:** mude a versão no `package.json` (ex.: `0.7.0`) e faça o push. Se ela for maior que a última tag, vale ela. Depois disso o patch volta a subir sozinho.
+- **Push sem Release:** ponha `[skip ci]` na mensagem do commit. Pushes que só mexem em arquivos `.md`, `LICENSE` ou `.gitignore` também não geram Release.
+- **Não crie tags `v*` à mão.** O próprio workflow cria.
+- Se o build falhar, a Release fica como rascunho e nada chega aos usuários. O próximo push tenta de novo com o mesmo número.
 
-Para gerar e publicar à mão:
+Para gerar e publicar à mão (só se o GitHub Actions estiver fora do ar):
 
 1. Suba a versão em `package.json` (ex.: `0.4.1`).
 2. Gere os instaladores. Eles saem em `release/`, sem a versão no nome, para os links continuarem valendo.
@@ -123,8 +125,6 @@ Para gerar e publicar à mão:
    ```
 
    Também dá para arrastar os arquivos na página da Release, no site do GitHub.
-
-Alternativa sem precisar de Windows: o workflow **Instaladores** (`.github/workflows/build.yml`) gera tudo nas máquinas do GitHub. Ao criar uma tag `v*`, ele mesmo publica a Release com os instaladores e os arquivos da atualização automática.
 
 O ícone sai de `public/favicon.svg`. Para regenerar: `npx electron scripts/make-icon.mjs`.
 
