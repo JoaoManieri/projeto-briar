@@ -298,10 +298,15 @@ kbd{font-size:10px;border:1px solid var(--line-2);border-radius:3px;padding:0 4p
 .refs.multi:hover .more{background:var(--accent);color:#0b1a15}
 .refs-pop{display:none;position:absolute;left:0;top:100%;z-index:10;min-width:250px;max-width:340px;flex-direction:column;gap:2px;padding:6px;margin-top:-2px;background:var(--bg-3);border:1px solid var(--line-2);border-radius:7px;box-shadow:0 12px 32px #0009}
 .refs-pop.up{top:auto;bottom:100%;margin-top:0;margin-bottom:-2px}
-.refs.multi:hover .refs-pop{display:flex}
+.refs.multi:hover .refs-pop,.refs.multi.open .refs-pop{display:flex}
+/* Arrastando: o :hover fica congelado no Chromium; só a linha sob o cursor (classe open) mostra a lista. */
+.dnd-active .refs.multi:hover:not(.open) .refs-pop{display:none}
+.dnd-active .row:has(.refs.multi.open){z-index:6}
+.refs-pop-item.current{cursor:default}
 .refs-pop-title{padding:2px 6px 5px;font-size:10.5px;color:var(--muted)}
 .refs-pop-item{display:flex;align-items:center;gap:7px;padding:6px 8px;border-radius:5px;text-align:left;font-size:12px;color:var(--text);border-left:3px solid var(--lane)}
-.refs-pop-item:hover:not(:disabled){background:var(--bg-4)}
+.refs-pop-item:hover:not(:disabled):not(.current){background:var(--bg-4)}
+.refs-pop-item.drop{outline:2px solid var(--accent);outline-offset:-2px;background:color-mix(in srgb,var(--accent) 18%,transparent)}
 .refs-pop-item:disabled{opacity:1;cursor:default}
 .refs-pop-item.current{background:color-mix(in srgb,var(--accent) 14%,transparent)}
 .refs-pop-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
