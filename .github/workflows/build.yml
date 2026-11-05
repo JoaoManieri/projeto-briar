@@ -16,12 +16,17 @@ jobs:
         include:
           - os: windows-latest
             script: dist:win
-            files: release/*.exe
+            # latest.yml e o .blockmap são lidos pelo atualizador automático do Briar
+            files: |
+              release/*.exe
+              release/*.exe.blockmap
+              release/latest.yml
           - os: ubuntu-latest
             script: dist:linux
             files: |
               release/*.AppImage
               release/*.deb
+              release/latest-linux.yml
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

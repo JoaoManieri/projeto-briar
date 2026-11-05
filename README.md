@@ -23,10 +23,28 @@ Instale o **Git** ([git-scm.com/downloads](https://git-scm.com/downloads)). Para
 - **Linux (AppImage):** `chmod +x Briar-x86_64.AppImage` e abra o arquivo.
 - **Linux (.deb):** `sudo apt install ./Briar-amd64.deb`. Para desinstalar: `sudo apt remove briar`.
 
-Ao abrir, clique em **Escolher pasta…** e selecione o seu clone, por exemplo `~/Projetos/projeto-pindorama`. O caminho fica salvo.
+Ao abrir, clique em **Escolher pasta…** e selecione o seu clone, por exemplo `~/Projetos/projeto-pindorama`. O caminho fica salvo, e as abas abertas voltam na próxima vez.
+
+### Atualizar
+
+O Briar procura versão nova ao abrir e depois a cada 4 horas. Para procurar na hora, clique na versão (**Briar 0.x.y**) no canto inferior direito.
+
+- **Instalador do Windows, AppImage e .deb:** a nova versão é baixada em segundo plano. Quando terminar, aparece **Reiniciar para atualizar** no topo. No `.deb` a instalação pede a senha de administrador.
+- **Briar-Portable.exe:** aparece **Versão X disponível**, que abre a página de download. Baixe o novo executável no lugar do antigo.
+
+A atualização automática começou na versão 0.4.0. Quem tem uma versão anterior precisa instalar a 0.4.0 manualmente uma vez.
 
 ## O que ele faz
 
+- **Vários repositórios em abas**, como no GitKraken.
+  - O **+** (ou <kbd>Ctrl</kbd>+<kbd>T</kbd>) mostra os repositórios salvos e permite abrir outro clone. Clicar no nome do repositório na barra de ferramentas faz o mesmo.
+  - Cada aba tem o próprio estado. Um push numa aba não trava as outras.
+  - A aba mostra a branch atual, um ponto quando há alterações não commitadas e um aviso quando há merge em andamento.
+  - <kbd>Ctrl</kbd>+<kbd>Tab</kbd> troca de aba. O botão do meio do mouse fecha a aba.
+- **Descartar alterações (lixeira vermelha no WIP).**
+  - Em cada arquivo, ou em **Descartar** no topo de Unstaged para todos de uma vez. Sempre pede confirmação.
+  - O arquivo volta a ficar como no último commit: arquivos apagados voltam e arquivos novos somem.
+  - Nada se perde de vez. As alterações vão para o stash do Git como "Briar: descartado…" e o aviso que aparece depois tem **Desfazer**. Mais tarde dá para recuperar com `git stash list` e `git stash apply`.
 - **Checkout com duplo clique.** Numa branch remota cuja local já existe (ex.: `origin/main` com `main`), o Briar troca para a local e a atualiza até o remoto quando possível. Se elas divergiram, ele avisa para fazer merge.
 - **Arrastar para fazer merge.** Arraste uma branch sobre outra: na lateral, num rótulo do grafo ou no seletor de branch do topo.
   - Antes do merge aparece quantos commits entram e quais arquivos vão dar conflito.
@@ -42,7 +60,7 @@ Ao abrir, clique em **Escolher pasta…** e selecione o seu clone, por exemplo `
 - **Pull** (fast-forward ou com merge), **Push** (cria o upstream na primeira vez, nunca faz force push), **Fetch** e **Branch**.
 - Histórico das operações Git da sessão (ícone de terminal).
 
-Não há rebase, descarte de alterações, reset hard nem force push. A troca de branch é bloqueada quando há alterações em arquivos rastreados (arquivos novos não atrapalham). A autenticação usa a configuração de Git/SSH já existente: o Briar nunca pede senha ou token.
+Não há rebase, reset hard nem force push. A troca de branch é bloqueada quando há alterações em arquivos rastreados (arquivos novos não atrapalham). A autenticação usa a configuração de Git/SSH já existente: o Briar nunca pede senha ou token.
 
 Cada pessoa usa o Briar no próprio computador, com o próprio clone. O time continua se comunicando pelo remoto Git (push/pull).
 
@@ -68,23 +86,35 @@ Estrutura:
 
 ## Publicar uma versão
 
-Os links de download apontam sempre para a Release mais recente do repositório `JoaoManieri/projeto-briar`. Para publicar:
+Os links de download e a atualização automática usam sempre a Release mais recente do repositório `JoaoManieri/projeto-briar`.
 
-1. Suba a versão em `package.json` (ex.: `0.3.1`).
+A versão em `package.json` precisa ser a mesma da tag. O app compara a versão dele com a da Release: se a tag for `v0.4.1` e o `package.json` disser `0.4.0`, o app instalado vai se achar desatualizado para sempre.
+
+O jeito mais simples (o workflow descrito abaixo gera e publica tudo):
+
+```bash
+npm version patch          # 0.4.0 → 0.4.1: altera package.json, faz commit e cria a tag v0.4.1
+git push --follow-tags
+```
+
+Para gerar e publicar à mão:
+
+1. Suba a versão em `package.json` (ex.: `0.4.1`).
 2. Gere os instaladores. Eles saem em `release/`, sem a versão no nome, para os links continuarem valendo.
-   - **No Windows:** `npm ci` e depois `npm run dist:win`. Gera `Briar-Setup.exe` e `Briar-Portable.exe`.
-   - **No Linux:** `npm ci` e depois `npm run dist:linux`. Gera `Briar-x86_64.AppImage` e `Briar-amd64.deb`.
+   - **No Windows:** `npm ci` e depois `npm run dist:win`. Gera `Briar-Setup.exe`, `Briar-Portable.exe`, `Briar-Setup.exe.blockmap` e `latest.yml`.
+   - **No Linux:** `npm ci` e depois `npm run dist:linux`. Gera `Briar-x86_64.AppImage`, `Briar-amd64.deb` e `latest-linux.yml`.
+   - Os arquivos `.yml` e `.blockmap` são o que a atualização automática lê. Envie-os junto com os instaladores.
 3. Crie a Release e envie os arquivos. Com o GitHub CLI:
 
    ```bash
-   gh release create v0.3.1 --title "Briar 0.3.1" --notes "O que mudou…"
-   gh release upload v0.3.1 release/Briar-Setup.exe release/Briar-Portable.exe       # do Windows
-   gh release upload v0.3.1 release/Briar-x86_64.AppImage release/Briar-amd64.deb   # do Linux
+   gh release create v0.4.1 --title "Briar 0.4.1" --notes "O que mudou…"
+   gh release upload v0.4.1 release/Briar-Setup.exe release/Briar-Portable.exe release/Briar-Setup.exe.blockmap release/latest.yml   # do Windows
+   gh release upload v0.4.1 release/Briar-x86_64.AppImage release/Briar-amd64.deb release/latest-linux.yml                          # do Linux
    ```
 
    Também dá para arrastar os arquivos na página da Release, no site do GitHub.
 
-Alternativa sem precisar de Windows: o workflow **Instaladores** (`.github/workflows/build.yml`) gera tudo nas máquinas do GitHub. Ao criar uma tag `v*`, ele mesmo publica a Release com os quatro arquivos.
+Alternativa sem precisar de Windows: o workflow **Instaladores** (`.github/workflows/build.yml`) gera tudo nas máquinas do GitHub. Ao criar uma tag `v*`, ele mesmo publica a Release com os instaladores e os arquivos da atualização automática.
 
 O ícone sai de `public/favicon.svg`. Para regenerar: `npx electron scripts/make-icon.mjs`.
 

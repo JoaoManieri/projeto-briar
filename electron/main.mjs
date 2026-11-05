@@ -6,6 +6,7 @@ import path from 'node:path';
 import {writeFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {createApp} from '../server/index.mjs';
+import {setupUpdates} from './updater.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const screenshot=process.env.BRIAR_SCREENSHOT;
@@ -42,6 +43,7 @@ async function start(){
   // Links externos vão para o navegador; a janela só navega dentro do Briar.
   win.webContents.setWindowOpenHandler(({url})=>{if(/^https?:\/\//.test(url)&&!url.startsWith(home))shell.openExternal(url);return {action:'deny'};});
   win.webContents.on('will-navigate',(e,url)=>{if(!url.startsWith(home))e.preventDefault();});
+  if(!screenshot)setupUpdates(()=>win);
   await win.loadURL(home);
   if(screenshot)await devScreenshot();
 }

@@ -1,8 +1,8 @@
-import {useEffect,useMemo,useRef,useState,type CSSProperties,type ReactNode} from 'react';
+import {useCallback,useEffect,useMemo,useRef,useState,type CSSProperties,type ReactNode} from 'react';
 import {
-  ArrowDown,ArrowDownToLine,ArrowLeft,ArrowUp,ArrowUpToLine,Check,ChevronDown,ChevronRight,CircleAlert,CircleHelp,Cloud,Copy,
+  ArrowDown,ArrowDownToLine,Download,LoaderCircle,RotateCw,ArrowLeft,ArrowUp,ArrowUpToLine,Check,ChevronDown,ChevronRight,CircleAlert,CircleHelp,Cloud,Copy,
   FileCode2,FolderGit2,GitBranch,GitBranchPlus,GitCommitHorizontal,GitMerge,Laptop,LockKeyhole,Maximize2,Minus,Pencil,Plus,
-  RefreshCw,Search,Sprout,Tag,Terminal,TriangleAlert,X
+  RefreshCw,Search,Sprout,Tag,Terminal,Trash2,TriangleAlert,Undo2,X
 } from 'lucide-react';
 import {ancestors,layoutGraph,palette,type History,type Commit} from './history';
 
@@ -10,13 +10,15 @@ type FileState={path:string;oldPath?:string;index:string;worktree:string;staged:
 type BranchRef={name:string;sha:string;remote:boolean};
 type Status={root:string;branch:string|null;head:string|null;files:FileState[];merging:{message:string;source?:string|null}|null;branches:BranchRef[];tags:{name:string;sha:string}[];upstream:string|null;ahead:number;behind:number;remote:string|null;remotes:string[];lastFetch:string|null;indexFingerprint:string;conflicted:boolean;audit:{command:string;output:string;date:string;success:boolean}[]};
 type State={status:Status|null;history:(History&{truncated?:boolean})|null;initialError:string};
-type Dialog='repo'|'operations'|'help'|'branch'|'merge'|'push'|'pull'|null;
+type Dialog='operations'|'help'|'branch'|'merge'|'push'|'pull'|'discard'|null;
+type Workspace={tabs:{root:string;name:string}[];active:string|null;recent:{root:string;name:string;open:boolean}[];initialError:string};
 type Choice={path:string;staged:boolean;sha?:string;conflicted?:boolean};
 type Label={key:string;text:string;local?:string;remote?:string;tag?:boolean;current:boolean;sha:string};
 type Preview={branch:string;current:string|null;into:string;needsCheckout:boolean;intoRemote:boolean;incoming:number;fastForward:boolean;conflicts:string[]};
 type Segment={type:'text';lines:string[]}|{type:'conflict';ours:string[];theirs:string[]};
 type Pick='ours'|'theirs'|'both'|'both-rev';
-declare global{interface Window{briar?:{desktop:boolean;pickFolder:()=>Promise<string|null>}}}
+type Update={current:string;kind:string;auto:boolean;status:'disabled'|'idle'|'checking'|'none'|'available'|'downloading'|'ready'|'installing'|'error';version?:string;percent?:number;error?:string;checkedAt?:number};
+declare global{interface Window{briar?:{desktop:boolean;pickFolder:()=>Promise<string|null>;update?:{state:()=>Promise<Update>;check:()=>Promise<Update>;install:()=>Promise<void>;onChange:(cb:(u:Update)=>void)=>()=>void}}}}
 const DRAG='text/x-briar-branch';
 
 // Divide o arquivo em trechos comuns e blocos <<<<<<< ======= >>>>>>> (diff3 incluso).
@@ -67,8 +69,8 @@ function ConflictEditor({text,ours,theirs,busy,onSave}:{text:string;ours:string;
   </div>;
 }
 
-async function api(route:string,body?:unknown,signal?:AbortSignal){
-  const r=await fetch('/api/'+route,{method:body===undefined?'GET':'POST',headers:{'X-Pindorama-Client':'local',...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)}),signal});
+async function api(route:string,body?:unknown,signal?:AbortSignal,repo?:string){
+  const r=await fetch('/api/'+route,{method:body===undefined?'GET':'POST',headers:{'X-Pindorama-Client':'local',...(repo?{'X-Briar-Repo':encodeURIComponent(repo)}:{}),...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)}),signal});
   const data=await r.json();
   if(!r.ok)throw new Error(data.error||'O servidor Git não respondeu.');
   return data;
@@ -90,8 +92,14 @@ function statusLetter(f:FileState,staged:boolean){
   return {letter:c==='?'?'+':c,cls,title};
 }
 
-export default function App(){
+type RepoProps={root:string;active:boolean;updatePill:ReactNode;versionLabel:ReactNode;onHome:()=>void;onClose:()=>void;onMeta:(root:string,meta:{busy:boolean;changes:number;branch:string|null;conflict:boolean})=>void};
+function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoProps){
+  const call=(route:string,body?:unknown,signal?:AbortSignal)=>api(route,body,signal,root);
+  const activeRef=useRef(active);activeRef.current=active;
   const [state,setState]=useState<State|null>(null);
+  const [loadError,setLoadError]=useState('');
+  const [discardPaths,setDiscardPaths]=useState<string[]>([]);
+  const [undo,setUndo]=useState<{stash:string;text:string}|null>(null);
   const [selected,setSelected]=useState('');
   const [highlight,setHighlight]=useState('all');
   const [query,setQuery]=useState('');
@@ -100,7 +108,6 @@ export default function App(){
   const [busy,setBusy]=useState('');
   const [error,setError]=useState('');
   const [toast,setToast]=useState('');
-  const [repoPath,setRepoPath]=useState('~/Projetos/projeto-pindorama');
   const [zoom,setZoom]=useState(1);
   const [tab,setTab]=useState<'files'|'info'>('files');
   const [message,setMessage]=useState('');
@@ -171,14 +178,18 @@ export default function App(){
   const unstaged=s?.files.filter(f=>f.unstaged&&!f.conflicted)||[];
   const conflicts=s?.files.filter(f=>f.conflicted)||[];
 
-  async function refresh(showError=true){const id=++seq.current;try{const next=await api('state');if(id===seq.current){setState(next);setUpdated(new Date().toISOString());if(next.status)setRepoPath(next.status.root);}}catch(e){if(showError)setError((e as Error).message);}}
-  useEffect(()=>{void refresh();const focus=()=>{if(!busyRef.current)void refresh(false);};window.addEventListener('focus',focus);const interval=setInterval(focus,15000);return()=>{window.removeEventListener('focus',focus);clearInterval(interval);};},[]);
+  async function refresh(showError=true){const id=++seq.current;try{const next=await call('state');if(id===seq.current){setState(next);setLoadError('');setUpdated(new Date().toISOString());}}catch(e){if(!state)setLoadError((e as Error).message);else if(showError)setError((e as Error).message);}}
+  // Só a aba visível consulta o Git a cada 15 s; as outras se atualizam ao voltar a ficar visíveis.
+  useEffect(()=>{if(!active)void refresh(false);},[]);
+  useEffect(()=>{if(!active)return;void refresh(false);const focus=()=>{if(!busyRef.current)void refresh(false);};window.addEventListener('focus',focus);const interval=setInterval(focus,15000);return()=>{window.removeEventListener('focus',focus);clearInterval(interval);};},[active]);
+  useEffect(()=>{onMeta(root,{busy:!!busy,changes:state?.status?.files.length||0,branch:state?.status?.branch||null,conflict:!!state?.status?.merging});},[busy,state]);
+  useEffect(()=>{if(undo){const t=setTimeout(()=>setUndo(null),15000);return()=>clearTimeout(t);}},[undo]);
   useEffect(()=>{if(toast){const t=setTimeout(()=>setToast(''),5000);return()=>clearTimeout(t);}},[toast]);
-  useEffect(()=>{if(!shownCommit)return;setCommitFiles(null);const c=new AbortController();api('commit-files',{sha:shownCommit.sha},c.signal).then(setCommitFiles).catch(e=>{if(e.name!=='AbortError')setCommitFiles(null);});return()=>c.abort();},[shownCommit?.sha,s?.root]);
-  useEffect(()=>{if(!choice){setDiff('');return;}setDiff('Carregando diferenças…');const c=new AbortController();api('diff',{path:choice.path,staged:choice.staged,sha:choice.sha},c.signal).then(r=>setDiff(r.diff)).catch(e=>{if(e.name!=='AbortError')setDiff(e.message);});return()=>c.abort();},[choice,s?.indexFingerprint]);
+  useEffect(()=>{if(!shownCommit)return;setCommitFiles(null);const c=new AbortController();call('commit-files',{sha:shownCommit.sha},c.signal).then(setCommitFiles).catch(e=>{if(e.name!=='AbortError')setCommitFiles(null);});return()=>c.abort();},[shownCommit?.sha,s?.root]);
+  useEffect(()=>{if(!choice){setDiff('');return;}setDiff('Carregando diferenças…');const c=new AbortController();call('diff',{path:choice.path,staged:choice.staged,sha:choice.sha},c.signal).then(r=>setDiff(r.diff)).catch(e=>{if(e.name!=='AbortError')setDiff(e.message);});return()=>c.abort();},[choice,s?.indexFingerprint]);
   useEffect(()=>{if(choice&&!choice.sha&&s&&!s.files.some(f=>f.path===choice.path))setChoice(null);},[s?.files]);
   useEffect(()=>{if(s?.merging&&!message)setMessage(subject(s.merging.message));},[s?.merging?.message]);
-  useEffect(()=>{if(dialog!=='merge'||!target){setPreview(null);setPreviewError('');return;}setPreview(null);setPreviewError('');const c=new AbortController();api('merge-preview',{branch:target,into:into||undefined},c.signal).then(setPreview).catch(e=>{if(e.name!=='AbortError')setPreviewError(e.message);});return()=>c.abort();},[dialog,target,into,s?.head]);
+  useEffect(()=>{if(dialog!=='merge'||!target){setPreview(null);setPreviewError('');return;}setPreview(null);setPreviewError('');const c=new AbortController();call('merge-preview',{branch:target,into:into||undefined},c.signal).then(setPreview).catch(e=>{if(e.name!=='AbortError')setPreviewError(e.message);});return()=>c.abort();},[dialog,target,into,s?.head]);
   // Merge com conflito: abre o primeiro arquivo em conflito ao entrar (inclusive ao reabrir o app).
   useEffect(()=>{const list=s?.files.filter(f=>f.conflicted)||[];if(!s?.merging){autoOpened.current=false;return;}if(list.length&&!autoOpened.current){autoOpened.current=true;setSelected(WIP);setChoice({path:list[0].path,staged:false,conflicted:true});}},[s?.merging,s?.files]);
   useEffect(()=>{setRawConflict(false);},[choice?.path]);
@@ -186,12 +197,12 @@ export default function App(){
   function select(id:string,ensure=false){setSelected(id);setChoice(null);if(ensure)requestAnimationFrame(()=>scroll.current?.querySelector(`[data-sha="${id}"]`)?.scrollIntoView({block:'nearest',behavior:'smooth'}));}
   function reset(){setHighlight('all');setQuery('');setAuthor('all');}
   function jump(delta:number){const list=rows.filter(c=>matches.has(c.sha));const cur=showWip?WIP:shownCommit?.sha;const i=list.findIndex(c=>c.sha===cur);const next=list[Math.max(0,Math.min(list.length-1,i+delta))];if(next)select(next.sha,true);}
-  useEffect(()=>{function key(e:KeyboardEvent){if(dialog||(e.target as HTMLElement).closest('input,textarea,select'))return;if(e.key==='/'){e.preventDefault();search.current?.focus();}if(e.key==='Escape'&&choice)setChoice(null);if(e.key==='ArrowDown'){e.preventDefault();jump(1);}if(e.key==='ArrowUp'){e.preventDefault();jump(-1);}}window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);});
+  useEffect(()=>{function key(e:KeyboardEvent){if(!activeRef.current||dialog||(e.target as HTMLElement).closest('input,textarea,select'))return;if(e.key==='/'){e.preventDefault();search.current?.focus();}if(e.key==='Escape'&&choice)setChoice(null);if(e.key==='ArrowDown'){e.preventDefault();jump(1);}if(e.key==='ArrowUp'){e.preventDefault();jump(-1);}}window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);});
   useEffect(()=>{if(!dialog)return;const prev=document.activeElement as HTMLElement;const controls=()=>[...(modal.current?.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],input,textarea,select')||[])];(modal.current?.querySelector<HTMLElement>('[data-autofocus]')||controls()[1]||controls()[0])?.focus();const key=(e:KeyboardEvent)=>{if(e.key==='Escape'&&!busyRef.current)setDialog(null);if(e.key==='Tab'){const list=controls(),first=list[0],last=list[list.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}};window.addEventListener('keydown',key);return()=>{window.removeEventListener('keydown',key);prev?.focus?.();};},[dialog]);
 
   async function action(name:string,body:unknown={},success='Operação concluída.'):Promise<any>{
     if(busyRef.current)return null;busyRef.current=true;setBusy(name);setError('');
-    try{const r=await api(name,body);await refresh();setToast(r?.output?.message||success);return r;}
+    try{const r=await call(name,body);await refresh();setToast(r?.output?.message||success);return r;}
     catch(e){setError((e as Error).message);await refresh(false);return null;}
     finally{busyRef.current=false;setBusy('');}
   }
@@ -200,7 +211,6 @@ export default function App(){
     if(list.length){setToast('');setError(`Conflitos em ${list.length} ${list.length===1?'arquivo':'arquivos'}. Resolva no painel à direita.`);setSelected(WIP);setChoice({path:list[0],staged:false,conflicted:true});}
     else setToast(ok);
   }
-  async function openRepo(e:React.FormEvent){e.preventDefault();if(await action('repository',{path:repoPath},'Repositório aberto.')){setDialog(null);setSelected('');reset();setChoice(null);setMessage('');setDescription('');}}
   async function commit(){if(!s)return;const text=message.trim()+(description.trim()?'\n\n'+description.trim():'');if(await action('commit',{message:text,expectedHead:s.head,expectedIndex:s.indexFingerprint},s.merging?'Merge concluído.':'Commit criado.')){setMessage('');setDescription('');setChoice(null);setSelected('');}}
   async function copy(text:string){try{await navigator.clipboard.writeText(text);setToast('Hash copiado.');}catch{setToast('Não foi possível copiar.');}}
   function openMerge(name='',dest=''){const d=dest&&dest!==s?.branch?dest:'';setInto(d);setTarget(name||allBranches.find(b=>b.name!==(d||s?.branch))?.name||'');setDialog('merge');}
@@ -221,10 +231,12 @@ export default function App(){
   async function runBranch(e:React.FormEvent){e.preventDefault();const from=branchFrom==='selected'&&shownCommit?shownCommit.sha:undefined;if(await action('branch',{name:branchName,from,checkout:branchCheckout},`Branch ${branchName.trim()} criada.`)){setDialog(null);setSelected('');}}
   async function resolve(path:string,side:'ours'|'theirs'|'mark'|'content',content?:string){const ok=await action('resolve',{path,side,content},side==='mark'||side==='content'?`${path} resolvido.`:side==='ours'?'Mantida a sua versão.':'Mantida a versão recebida.');if(ok){const next=conflicts.find(f=>f.path!==path);setChoice(next?{path:next.path,staged:false,conflicted:true}:{path,staged:true});}}
 
+  function openDiscard(paths:string[]){if(!paths.length)return;setDiscardPaths(paths);setDialog('discard');}
+  async function runDiscard(){const r=await action('discard',{paths:discardPaths},'Alterações descartadas.');if(r){setDialog(null);if(choice&&discardPaths.includes(choice.path))setChoice(null);if(r.output?.stash){setToast('');setUndo({stash:r.output.stash,text:r.output.message});}}}
+  async function undoDiscard(){if(!undo)return;const stash=undo.stash;setUndo(null);await action('undo-discard',{stash},'Descarte desfeito.');}
   const brand=<span className="brand"><span className="brand-icon"><Sprout size={18}/></span><span>Briar</span></span>;
-  const connectionForm=<form className="connect-form" onSubmit={openRepo}><label htmlFor="repo-path">Caminho do clone neste computador</label><input id="repo-path" data-autofocus value={repoPath} onChange={e=>setRepoPath(e.target.value)} placeholder="~/Projetos/projeto-pindorama" autoComplete="off" spellCheck={false}/><p>O aplicativo usa o Git instalado na sua máquina.</p><div className="connect-actions">{window.briar?.desktop&&<button type="button" className="btn ghost" disabled={!!busy} onClick={async()=>{const dir=await window.briar!.pickFolder();if(dir){setRepoPath(dir);if(await action('repository',{path:dir},'Repositório aberto.')){setDialog(null);setSelected('');reset();setChoice(null);}}}}><FolderGit2 size={15}/>Escolher pasta…</button>}<button disabled={!!busy||!repoPath.trim()} className="btn primary" type="submit"><FolderGit2 size={15}/>{busy==='repository'?'Abrindo…':'Abrir repositório'}</button></div></form>;
 
-  if(!state||!s||!h)return <div className="welcome"><div className="welcome-card">{brand}<h1>Abra um repositório</h1>{!state?<p className="muted">Conectando ao servidor Git local…</p>:connectionForm}{(error||state?.initialError)&&<div className="inline-error" role="alert">{error||state?.initialError}</div>}<p className="welcome-note"><LockKeyhole size={13}/>Servidor local em 127.0.0.1. Nada é enviado para hospedagem.</p></div></div>;
+  if(!state||!s||!h)return <div className="welcome" hidden={!active}><div className="welcome-card">{brand}<h1>{root.split('/').pop()}</h1>{loadError||state?.initialError?<><div className="inline-error" role="alert">{loadError||state?.initialError}</div><div className="connect-actions"><button className="btn ghost" onClick={()=>{setLoadError('');void refresh();}}><RefreshCw size={14}/>Tentar de novo</button><button className="btn danger" onClick={onClose}><X size={14}/>Fechar aba</button></div></>:<p className="muted">Lendo o repositório…</p>}<p className="welcome-note"><FolderGit2 size={13}/>{root}</p></div></div>;
 
   const toolButton=(icon:ReactNode,label:string,onClick:()=>void,opts:{badge?:number;disabled?:boolean;spin?:boolean;title?:string}={})=><button className="tool" onClick={onClick} disabled={!!busy||opts.disabled} title={opts.title||label}><span className="tool-icon">{icon}{!!opts.badge&&<span className="tool-badge">{opts.badge}</span>}</span><span>{label}</span></button>;
 
@@ -277,6 +289,7 @@ export default function App(){
   const fileRow=(f:FileState,kind:'unstaged'|'staged')=>{const st=statusLetter(f,kind==='staged');const [dir,name]=splitPath(f.path);const active=choice&&!choice.sha&&choice.path===f.path&&choice.staged===(kind==='staged');return <div key={kind+f.path} className={`file-row ${active?'active':''}`}>
     <span className={`st ${st.cls}`} title={st.title}>{st.letter}</span>
     <button className="file-name" title={f.oldPath?`${f.oldPath} → ${f.path}`:f.path} onClick={()=>setChoice({path:f.path,staged:kind==='staged'})}><span className="fn">{name}</span><span className="fd">{dir}</span></button>
+    <button className="file-act discard" title={`Descartar as alterações de ${f.path}`} aria-label={`Descartar ${f.path}`} disabled={!!busy||!!s.merging} onClick={()=>openDiscard([f.path])}><Trash2 size={12}/></button>
     {kind==='unstaged'
       ?<button className="file-act stage" disabled={!!busy} onClick={()=>action('stage',{paths:[f.path]},'Arquivo preparado.')}>Stage</button>
       :<button className="file-act unstage" disabled={!!busy} onClick={()=>action('unstage',{paths:[f.path]},'Arquivo retirado.')}>Unstage</button>}
@@ -286,7 +299,7 @@ export default function App(){
     <div className="panel-title"><Pencil size={14}/><span>{s.files.length} {s.files.length===1?'alteração':'alterações'} em <b>{s.branch||'HEAD destacado'}</b></span></div>
     {s.merging&&<div className="merge-box"><div className="merge-box-title"><GitMerge size={14}/>Merge em andamento</div><p>{subject(s.merging.message)}</p><p className="muted">{conflicts.length?`${conflicts.length} ${conflicts.length===1?'arquivo em conflito':'arquivos em conflito'}. Resolva todos para concluir.`:'Todos os conflitos resolvidos. Escreva a mensagem e conclua o merge.'}</p><button className="btn danger" disabled={!!busy} onClick={()=>action('merge-abort',{},'Merge abortado. Branch restaurada.')}><X size={13}/>Abortar merge</button></div>}
     {conflicts.length>0&&<div className="file-group conflict-group"><div className="group-head"><TriangleAlert size={13}/>Conflitos<span className="count">{conflicts.length}</span></div>{conflicts.map(f=>{const [dir,name]=splitPath(f.path);return <div key={'c'+f.path} className={`file-row ${choice?.conflicted&&choice.path===f.path?'active':''}`}><span className="st st-conflict">!</span><button className="file-name" title={f.path} onClick={()=>setChoice({path:f.path,staged:false,conflicted:true})}><span className="fn">{name}</span><span className="fd">{dir}</span></button><button className="file-act" onClick={()=>setChoice({path:f.path,staged:false,conflicted:true})}>Resolver</button></div>;})}</div>}
-    <div className="file-group"><div className="group-head">Unstaged<span className="count">{unstaged.length}</span>{unstaged.length>0&&<button className="group-act stage" disabled={!!busy} onClick={()=>action('stage',{paths:unstaged.map(f=>f.path)},'Todos os arquivos preparados.')}>Stage all</button>}</div>{unstaged.length?unstaged.map(f=>fileRow(f,'unstaged')):<p className="files-empty">Nada pendente.</p>}</div>
+    <div className="file-group"><div className="group-head">Unstaged<span className="count">{unstaged.length}</span>{unstaged.length>0&&<><button className="group-act discard" title="Descartar todas as alterações não preparadas" disabled={!!busy||!!s.merging} onClick={()=>openDiscard(unstaged.map(f=>f.path))}><Trash2 size={11}/>Descartar</button><button className="group-act stage" disabled={!!busy} onClick={()=>action('stage',{paths:unstaged.map(f=>f.path)},'Todos os arquivos preparados.')}>Stage all</button></>}</div>{unstaged.length?unstaged.map(f=>fileRow(f,'unstaged')):<p className="files-empty">Nada pendente.</p>}</div>
     <div className="file-group"><div className="group-head">Staged<span className="count">{staged.length}</span>{staged.length>0&&<button className="group-act unstage" disabled={!!busy} onClick={()=>action('unstage',{paths:staged.map(f=>f.path)},'Todos os arquivos retirados.')}>Unstage all</button>}</div>{staged.length?staged.map(f=>fileRow(f,'staged')):<p className="files-empty">Use Stage para incluir arquivos no commit.</p>}</div>
     <div className="commit-box"><input placeholder={s.merging?'Mensagem do merge':'Resumo do commit'} value={message} maxLength={300} onChange={e=>setMessage(e.target.value)} aria-label="Resumo do commit"/><textarea placeholder="Descrição (opcional)" rows={3} value={description} maxLength={9500} onChange={e=>setDescription(e.target.value)} aria-label="Descrição do commit"/>
       <button className="btn primary wide" disabled={!!busy||(!staged.length&&!s.merging)||!message.trim()||s.conflicted||!s.branch} onClick={commit}>{busy==='commit'?'Criando commit…':s.merging?(s.conflicted?'Resolva os conflitos primeiro':'Concluir merge'):staged.length?`Commit de ${staged.length} ${staged.length===1?'arquivo':'arquivos'}`:'Prepare arquivos para commitar'}</button>
@@ -308,10 +321,10 @@ export default function App(){
   const nonCurrentBranches=allBranches.filter(b=>b.name!==(into||s.branch));
   const pushCmd=s.upstream&&s.remote&&s.remote!=='.'?`git push ${s.remote} ${s.branch}`:`git push -u ${s.remotes.includes('origin')?'origin':s.remotes[0]||'origin'} ${s.branch}`;
 
-  return <div className="app">
+  return <div className="app" hidden={!active}>
     <header className="toolbar">
       {brand}
-      <div className="repo-switch"><button className="crumb" onClick={()=>setDialog('repo')} disabled={!!busy} title={s.root}><span className="crumb-label">repositório</span><span className="crumb-value"><FolderGit2 size={13}/>{h.repository}<ChevronDown size={12}/></span></button>
+      <div className="repo-switch"><button className="crumb" onClick={onHome} title={`${s.root}\nClique para abrir outro repositório numa nova aba`}><span className="crumb-label">repositório</span><span className="crumb-value"><FolderGit2 size={13}/>{h.repository}<ChevronDown size={12}/></span></button>
         <div className={`crumb ${s.branch&&dropOn===s.branch?'drop':''}`} {...(s.branch?dnd(s.branch,false):{})} title="Solte uma branch aqui para fazer merge na branch atual"><span className="crumb-label">branch</span><span className="crumb-value branch-select"><GitBranch size={13}/><select aria-label="Trocar de branch" value={s.branch||''} disabled={!!busy} onChange={e=>openSwitch(e.target.value)}>{!s.branch&&<option value="">HEAD destacado</option>}<optgroup label="Local">{localBranches.map(b=><option key={b.name} value={b.name}>{b.name}</option>)}</optgroup>{remoteBranches.length>0&&<optgroup label="Remota">{remoteBranches.map(b=><option key={b.name} value={b.name}>{b.name}</option>)}</optgroup>}</select></span></div>
       </div>
       <div className="tools">
@@ -323,6 +336,7 @@ export default function App(){
         {toolButton(<GitMerge size={18}/>,'Merge',()=>openMerge(),{disabled:!s.branch||!!s.merging})}
       </div>
       <div className="toolbar-right">
+        {updatePill}
         <button className="icon-btn" title="Recarregar estado" onClick={()=>refresh()} disabled={!!busy}><RefreshCw size={15}/></button>
         <button className="icon-btn" title="Operações Git desta sessão" onClick={()=>setDialog('operations')}><Terminal size={15}/>{s.audit.length>0&&<span className="dot-count">{s.audit.length}</span>}</button>
         <button className="icon-btn" title="Ajuda" onClick={()=>setDialog('help')}><CircleHelp size={15}/></button>
@@ -400,7 +414,7 @@ export default function App(){
       <aside className="panel">{showWip?wipPanel:commitPanel||<div className="panel-empty"><GitCommitHorizontal size={26}/><p>Selecione um commit.</p></div>}</aside>
     </div>
 
-    <footer className="statusbar"><span title={s.root}><FolderGit2 size={12}/>{s.root}</span><span>{s.upstream?<>↑{s.ahead} ↓{s.behind} · {s.upstream}</>:'sem upstream'}</span><span>{s.lastFetch?`último fetch ${fmt(s.lastFetch,true)}`:'fetch ainda não executado'}</span><span className="grow"/><span>{updated?`atualizado ${new Date(updated).toLocaleTimeString('pt-BR')}`:''}</span><span><LockKeyhole size={11}/>local</span></footer>
+    <footer className="statusbar"><span title={s.root}><FolderGit2 size={12}/>{s.root}</span><span>{s.upstream?<>↑{s.ahead} ↓{s.behind} · {s.upstream}</>:'sem upstream'}</span><span>{s.lastFetch?`último fetch ${fmt(s.lastFetch,true)}`:'fetch ainda não executado'}</span><span className="grow"/><span>{updated?`atualizado ${new Date(updated).toLocaleTimeString('pt-BR')}`:''}</span>{versionLabel}<span><LockKeyhole size={11}/>local</span></footer>
 
     {dialog&&<div className="backdrop" onMouseDown={e=>{if(e.target===e.currentTarget&&!busy)setDialog(null);}}><div className="modal" ref={modal} role="dialog" aria-modal="true" aria-labelledby="dialog-title">
       <button className="modal-close icon-btn" aria-label="Fechar" disabled={!!busy} onClick={()=>setDialog(null)}><X size={16}/></button>
@@ -424,12 +438,89 @@ export default function App(){
         {s.files.some(f=>!f.untracked)&&<div className="inline-error">Faça commit das alterações locais antes do pull.</div>}
         <pre className="cmd">{pullMode==='ff'?'git pull --ff-only':'git pull --no-rebase --no-edit'}</pre>
         <div className="modal-actions"><button className="btn ghost" onClick={()=>setDialog(null)} disabled={!!busy}>Cancelar</button><button className="btn primary" data-autofocus disabled={!!busy||!s.upstream||s.files.some(f=>!f.untracked)} onClick={runPull}>{busy==='pull'?'Atualizando…':'Pull'}</button></div></>}
-      {dialog==='repo'&&<><h2 id="dialog-title"><FolderGit2 size={17}/>Abrir outro repositório</h2>{connectionForm}</>}
+      {dialog==='discard'&&<><h2 id="dialog-title" className="danger-title"><Trash2 size={17}/>Descartar {discardPaths.length===1?'alterações do arquivo':`alterações de ${discardPaths.length} arquivos`}</h2><p className="modal-text">{discardPaths.length===1?'O arquivo volta':'Os arquivos voltam'} a ficar como no último commit. Arquivos novos são removidos e arquivos apagados voltam. Vale tanto para o que está em Staged quanto para o que está em Unstaged.</p><ul className="conflict-list discard-list">{discardPaths.slice(0,12).map(p=>{const f=s.files.find(x=>x.path===p);const st=f?statusLetter(f,!f.unstaged):null;return <li key={p}>{st&&<span className={`st ${st.cls}`} title={st.title}>{st.letter}</span>}<code>{p}</code></li>;})}{discardPaths.length>12&&<li className="muted">e mais {discardPaths.length-12}…</li>}</ul><p className="muted small"><Undo2 size={12}/> Dá para desfazer logo depois pelo aviso que aparece embaixo. As alterações também ficam guardadas no stash do Git como "Briar: descartado…".</p><div className="modal-actions"><button className="btn ghost" data-autofocus onClick={()=>setDialog(null)} disabled={!!busy}>Cancelar</button><button className="btn danger-solid" disabled={!!busy} onClick={runDiscard}><Trash2 size={13}/>{busy==='discard'?'Descartando…':'Descartar'}</button></div></>}
       {dialog==='operations'&&<><h2 id="dialog-title"><Terminal size={17}/>Operações Git desta sessão</h2><div className="audit">{s.audit.length?s.audit.map((a,i)=><div className="audit-entry" key={a.date+i}><span className={a.success?'plus':'minus'}>{a.success?'ok':'falhou'} · {new Date(a.date).toLocaleTimeString('pt-BR')}</span><code>{a.command}</code>{a.output&&<pre>{a.output}</pre>}</div>):<p className="muted">Nenhuma operação executada ainda.</p>}</div></>}
       {dialog==='help'&&<><h2 id="dialog-title"><CircleHelp size={17}/>Como usar</h2><div className="help"><p><b>Grafo:</b> cada coluna é uma linha de desenvolvimento. A branch atual fica na primeira coluna, com traço mais grosso e rótulo destacado com <Check size={11}/>. <Laptop size={11}/> = local, <Cloud size={11}/> = remota.</p><p><b>// WIP:</b> linha no topo com seus arquivos ainda não commitados. Clique nela para fazer stage e commit no painel à direita.</p><p><b>Branches:</b> clique para localizar no grafo; duplo clique faz checkout (se a branch local já existe, o Briar troca para ela e a atualiza com o remoto). <b>Arraste uma branch sobre outra</b> (na lateral, no grafo ou no seletor de branch do topo) para abrir o merge.</p><p><b>Merge:</b> mostra antes quais arquivos terão conflito. Se houver, cada arquivo aparece em "Conflitos" e o aviso vermelho fica no topo até alguém resolver: escolha trecho a trecho a sua versão, a recebida ou as duas, ou edite no editor e marque como resolvido. Depois clique em <b>Concluir merge</b> — ou <b>Abortar</b> para voltar ao estado anterior.</p><p><b>Pull / Push / Fetch:</b> usam a autenticação Git já configurada. Nunca há force push.</p><p><kbd>/</kbd> busca · <kbd>↑</kbd><kbd>↓</kbd> navegam · <kbd>esc</kbd> fecha.</p></div></>}
       {error&&<div className="inline-error" role="alert">{error}<button aria-label="Dispensar" onClick={()=>setError('')}><X size={13}/></button></div>}
     </div></div>}
     {error&&!dialog&&<div className="error-toast" role="alert"><CircleAlert size={15}/><span>{error}</span><button aria-label="Dispensar erro" onClick={()=>setError('')}><X size={14}/></button></div>}
+    {toast&&!undo&&<div className="toast" role="status"><Check size={15}/>{toast}</div>}
+    {undo&&<div className="toast undo-toast" role="status"><Trash2 size={15}/>{undo.text}<button className="btn ghost sm" disabled={!!busy} onClick={undoDiscard}><Undo2 size={13}/>Desfazer</button><button aria-label="Dispensar" onClick={()=>setUndo(null)}><X size={13}/></button></div>}
+  </div>;
+}
+
+type Meta={busy:boolean;changes:number;branch:string|null;conflict:boolean};
+// Abas no estilo GitKraken: cada repositório aberto é uma aba com estado próprio (seleção, mensagem de
+// commit, operação em andamento). Trocar de aba não interrompe o que está rodando nas outras.
+export default function App(){
+  const [ws,setWs]=useState<Workspace|null>(null);
+  const [home,setHome]=useState(false);
+  const [meta,setMeta]=useState<Record<string,Meta>>({});
+  const [error,setError]=useState('');
+  const [toast,setToast]=useState('');
+  const [update,setUpdate]=useState<Update|null>(null);
+  const [repoPath,setRepoPath]=useState('');
+  const [opening,setOpening]=useState(false);
+  const showHome=home||!ws?.tabs.length;
+
+  useEffect(()=>{api('workspace').then((w:Workspace)=>{setWs(w);if(w.initialError)setError(w.initialError);}).catch(e=>setError((e as Error).message));},[]);
+  useEffect(()=>{const u=window.briar?.update;if(!u)return;u.state().then(setUpdate).catch(()=>{});return u.onChange(setUpdate);},[]);
+  useEffect(()=>{if(update?.status==='ready'&&update.error)setError(update.error);},[update?.error]);
+  useEffect(()=>{if(toast){const t=setTimeout(()=>setToast(''),5000);return()=>clearTimeout(t);}},[toast]);
+  const onMeta=useCallback((root:string,m:Meta)=>setMeta(x=>({...x,[root]:m})),[]);
+  const onHome=useCallback(()=>{setError('');setHome(true);},[]);
+
+  async function openPath(p:string){if(!p.trim()||opening)return;setOpening(true);setError('');try{const r=await api('workspace/open',{path:p.trim()});setWs(r.workspace);setHome(false);setRepoPath('');}catch(e){setError((e as Error).message);}finally{setOpening(false);}}
+  function activate(root:string){setHome(false);setError('');if(ws?.active===root)return;setWs(w=>w&&{...w,active:root});api('workspace/activate',{root}).catch(()=>{});}
+  async function close(root:string){try{const r=await api('workspace/close',{root});setWs(r.workspace);setMeta(({[root]:_,...rest})=>rest);}catch(e){setError((e as Error).message);}}
+  async function forget(root:string){try{const r=await api('workspace/forget',{root});setWs(r.workspace);}catch(e){setError((e as Error).message);}}
+  async function pick(){const dir=await window.briar?.pickFolder();if(dir)await openPath(dir);}
+  async function checkUpdate(){const u=window.briar?.update;if(!u)return;const r=await u.check().catch(e=>({status:'error',error:String(e?.message||e)}) as Update);if(r.status==='none')setToast(`O Briar já está na versão mais nova (${r.current}).`);else if(r.status==='error')setError(`Não foi possível procurar atualização: ${r.error}`);}
+
+  // Ctrl+T: nova aba · Ctrl+Tab / Ctrl+Shift+Tab: próxima / anterior · Esc na tela inicial volta para a aba.
+  useEffect(()=>{function key(e:KeyboardEvent){
+    if(!ws)return;
+    if(e.ctrlKey&&e.key.toLowerCase()==='t'){e.preventDefault();onHome();return;}
+    if(e.ctrlKey&&e.key==='Tab'&&ws.tabs.length){e.preventDefault();const i=showHome?-1:ws.tabs.findIndex(t=>t.root===ws.active);const n=ws.tabs.length;activate(ws.tabs[((e.shiftKey?i-1:i+1)%n+n)%n].root);return;}
+    if(e.key==='Escape'&&home&&ws.tabs.length&&!(e.target as HTMLElement).closest('input'))setHome(false);
+  }window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);});
+
+  const updatePill=update&&(update.status==='downloading'?<span className="update-pill busy" title="A nova versão está sendo baixada em segundo plano."><LoaderCircle size={13} className="spinning"/>Baixando {update.version} · {update.percent||0}%</span>
+    :update.status==='ready'?<button className="update-pill ready" onClick={()=>window.briar?.update?.install()} title={update.kind==='deb'?'Instala a nova versão (pede a senha de administrador) e reabre o Briar.':'Fecha, instala a nova versão e reabre o Briar.'}><RotateCw size={13}/>Reiniciar para atualizar · {update.version}</button>
+    :update.status==='installing'?<span className="update-pill busy"><LoaderCircle size={13} className="spinning"/>Instalando {update.version}…</span>
+    :update.status==='available'?<button className="update-pill ready" onClick={()=>window.briar?.update?.install()} title="Abre a página de download da nova versão."><Download size={13}/>Versão {update.version} disponível</button>
+    :null);
+  const versionLabel=update&&update.status!=='disabled'&&<button className="status-link" onClick={checkUpdate} disabled={update.status==='checking'||update.status==='downloading'||update.status==='installing'} title={update.status==='error'?`Falha ao procurar atualização: ${update.error}\nClique para tentar de novo.`:'Procurar atualização'}>{update.status==='checking'?<LoaderCircle size={11} className="spinning"/>:update.status==='error'?<TriangleAlert size={11}/>:<Sprout size={11}/>}Briar {update.current}</button>;
+
+  if(!ws)return <div className="shell"><div className="welcome"><div className="welcome-card"><span className="brand"><span className="brand-icon"><Sprout size={18}/></span><span>Briar</span></span>{error?<div className="inline-error" role="alert">{error}</div>:<p className="muted">Conectando ao servidor Git local…</p>}</div></div></div>;
+
+  const recent=ws.recent;
+  return <div className="shell">
+    <nav className="tabbar" aria-label="Repositórios abertos">
+      <span className="tabbar-icon"><Sprout size={14}/></span>
+      {ws.tabs.map(t=>{const m=meta[t.root];const on=!showHome&&ws.active===t.root;return <div key={t.root} className={`tab ${on?'on':''}`} title={`${t.root}${m?.branch?`\nbranch ${m.branch}`:''}${m?.changes?`\n${m.changes} ${m.changes===1?'alteração':'alterações'} não commitadas`:''}`}>
+        <button className="tab-main" onClick={()=>activate(t.root)} onAuxClick={e=>{if(e.button===1)void close(t.root);}}>
+          {m?.busy?<LoaderCircle size={13} className="spinning"/>:m?.conflict?<TriangleAlert size={13} className="tab-warn"/>:<FolderGit2 size={13}/>}
+          <span className="tab-name">{t.name}</span>{m?.branch&&<span className="tab-branch">{m.branch}</span>}{!!m?.changes&&<span className="tab-dot" aria-label="alterações não commitadas"/>}
+        </button>
+        <button className="tab-close" aria-label={`Fechar ${t.name}`} title="Fechar aba (botão do meio do mouse também fecha)" onClick={()=>close(t.root)}><X size={12}/></button>
+      </div>;})}
+      <button className={`tab-add ${showHome?'on':''}`} onClick={onHome} title="Abrir repositório em nova aba (Ctrl+T)" aria-label="Nova aba"><Plus size={15}/></button>
+    </nav>
+    {ws.tabs.map(t=><Repo key={t.root} root={t.root} active={!showHome&&ws.active===t.root} updatePill={updatePill} versionLabel={versionLabel} onHome={onHome} onClose={()=>close(t.root)} onMeta={onMeta}/>)}
+    {showHome&&<div className="welcome home"><div className="welcome-card home-card">
+      <span className="brand"><span className="brand-icon"><Sprout size={18}/></span><span>Briar</span></span>
+      <h1>Abrir repositório</h1>
+      {recent.length>0&&<><div className="recent-title">Repositórios salvos</div><div className="recent">{recent.map(r=><div key={r.root} className="recent-row">
+        <button className="recent-main" disabled={opening} onClick={()=>r.open?activate(r.root):openPath(r.root)} title={r.open?'Ir para a aba':'Abrir numa nova aba'}><FolderGit2 size={15}/><span className="recent-text"><b>{r.name}</b><span>{r.root}</span></span>{r.open&&<span className="recent-open">aberto</span>}</button>
+        {!r.open&&<button className="recent-forget" title="Tirar da lista (não apaga nada do disco)" aria-label={`Tirar ${r.name} da lista`} onClick={()=>forget(r.root)}><X size={13}/></button>}
+      </div>)}</div></>}
+      <form className="connect-form" onSubmit={e=>{e.preventDefault();void openPath(repoPath);}}><label htmlFor="repo-path">{recent.length?'Outro clone neste computador':'Caminho do clone neste computador'}</label><input id="repo-path" autoFocus value={repoPath} onChange={e=>setRepoPath(e.target.value)} placeholder="~/Projetos/projeto-pindorama" autoComplete="off" spellCheck={false}/><p>O aplicativo usa o Git instalado na sua máquina. Cada repositório abre numa aba e fica salvo nesta lista.</p><div className="connect-actions">{window.briar?.desktop&&<button type="button" className="btn ghost" disabled={opening} onClick={pick}><FolderGit2 size={15}/>Escolher pasta…</button>}<button disabled={opening||!repoPath.trim()} className="btn primary" type="submit"><FolderGit2 size={15}/>{opening?'Abrindo…':'Abrir repositório'}</button></div></form>
+      {error&&<div className="inline-error" role="alert">{error}<button aria-label="Dispensar" onClick={()=>setError('')}><X size={13}/></button></div>}
+      <p className="welcome-note"><LockKeyhole size={13}/>Servidor local em 127.0.0.1. Nada é enviado para hospedagem.{ws.tabs.length>0&&<> · <kbd>Esc</kbd> volta para a aba</>}</p>
+      {updatePill&&<div className="welcome-update">{updatePill}</div>}
+    </div></div>}
+    {!showHome&&error&&<div className="error-toast" role="alert"><CircleAlert size={15}/><span>{error}</span><button aria-label="Dispensar erro" onClick={()=>setError('')}><X size={14}/></button></div>}
     {toast&&<div className="toast" role="status"><Check size={15}/>{toast}</div>}
   </div>;
 }
