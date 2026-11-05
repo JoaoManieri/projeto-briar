@@ -54,6 +54,16 @@ A atualização automática começou na versão 0.4.0. Quem tem uma versão ante
   - Uma faixa vermelha fica no topo e a branch aparece como **CONFLITO**. Isso continua mesmo depois de fechar e abrir o app, porque é o estado do próprio Git.
   - Cada arquivo abre num editor por trecho, com *sua versão* e *recebida* lado a lado e os botões *Usar a minha*, *Usar a recebida* ou *As duas*.
   - Depois, **Concluir merge** ou **Abortar**.
+- **Botão direito em branches, tags e commits** (na lateral, no grafo e na lista "+N").
+  - **Branch:** checkout, merge na atual, criar tag ali, apagar a local, apagar no remoto ou as duas.
+    - A branch atual não pode ser apagada.
+    - Se os commits dela não estão em nenhuma outra branch, o Briar recusa até você marcar "Apagar mesmo assim".
+  - **Criar tag:** o nome já vem com o próximo número da última tag criada (`v1.0.4` → `v1.0.5`).
+    - Não deixa repetir uma tag que já existe.
+    - Com mensagem, vira tag anotada.
+    - A caixa "Enviar a tag (push)" vem marcada.
+  - **Tag:** push para o remoto, localizar no grafo, apagar local, apagar no remoto ou nos dois.
+  - **Commit:** criar tag ou branch ali, copiar o hash.
 - **Grafo** no estilo GitKraken, com a branch atual sempre na primeira coluna.
   - Quando um commit tem várias branches, aparece **+N**. Ao passar o mouse abre a lista delas: clique numa para fazer checkout, ou arraste para fazer merge.
 - **// WIP:** a linha no topo mostra os arquivos ainda não commitados. No painel direito ficam Stage/Unstage, diff e commit.

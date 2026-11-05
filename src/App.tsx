@@ -2,15 +2,22 @@ import {useCallback,useEffect,useMemo,useRef,useState,type CSSProperties,type Re
 import {
   ArrowDown,ArrowDownToLine,Download,LoaderCircle,RotateCw,ArrowLeft,ArrowUp,ArrowUpToLine,Check,ChevronDown,ChevronRight,CircleAlert,CircleHelp,Cloud,Copy,
   FileCode2,FolderGit2,GitBranch,GitBranchPlus,GitCommitHorizontal,GitMerge,Laptop,LockKeyhole,Maximize2,Minus,Pencil,Plus,
-  RefreshCw,Search,Sprout,Tag,Terminal,Trash2,TriangleAlert,Undo2,X
+  RefreshCw,Search,Send,Sprout,Tag,Terminal,Trash2,TriangleAlert,Undo2,X
 } from 'lucide-react';
 import {ancestors,layoutGraph,palette,type History,type Commit} from './history';
 
 type FileState={path:string;oldPath?:string;index:string;worktree:string;staged:boolean;unstaged:boolean;untracked:boolean;conflicted:boolean};
 type BranchRef={name:string;sha:string;remote:boolean};
-type Status={root:string;branch:string|null;head:string|null;files:FileState[];merging:{message:string;source?:string|null}|null;branches:BranchRef[];tags:{name:string;sha:string}[];upstream:string|null;ahead:number;behind:number;remote:string|null;remotes:string[];lastFetch:string|null;indexFingerprint:string;conflicted:boolean;audit:{command:string;output:string;date:string;success:boolean}[]};
+type Status={root:string;lastTag:string|null;branch:string|null;head:string|null;files:FileState[];merging:{message:string;source?:string|null}|null;branches:BranchRef[];tags:{name:string;sha:string}[];upstream:string|null;ahead:number;behind:number;remote:string|null;remotes:string[];lastFetch:string|null;indexFingerprint:string;conflicted:boolean;audit:{command:string;output:string;date:string;success:boolean}[]};
 type State={status:Status|null;history:(History&{truncated?:boolean})|null;initialError:string};
-type Dialog='operations'|'help'|'branch'|'merge'|'push'|'pull'|'discard'|null;
+type Dialog='operations'|'help'|'branch'|'merge'|'push'|'pull'|'discard'|'tag'|'delete-branch'|'delete-tag'|null;
+type MenuItem={label:string;icon?:ReactNode;danger?:boolean;disabled?:boolean;title?:string;run:()=>void}|'sep';
+type Menu={x:number;y:number;title:string;items:MenuItem[]};
+// Próxima versão a partir da última tag: v1.0.4 → v1.0.5 (soma 1 no último número), sem repetir uma existente.
+function nextTag(last:string|null,existing:string[]){
+  const bump=(t:string)=>{const m=/(\d+)(?!.*\d)/.exec(t);if(!m)return t+'.1';return t.slice(0,m.index)+String(Number(m[1])+1).padStart(m[1].length,'0')+t.slice(m.index+m[1].length);};
+  let next=last?bump(last):'v1.0.0';for(let i=0;i<500&&existing.includes(next);i++)next=bump(next);return next;
+}
 type Workspace={tabs:{root:string;name:string}[];active:string|null;recent:{root:string;name:string;open:boolean}[];initialError:string};
 type Choice={path:string;staged:boolean;sha?:string;conflicted?:boolean};
 type Label={key:string;text:string;local?:string;remote?:string;tag?:boolean;current:boolean;sha:string};
@@ -100,6 +107,14 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
   const [loadError,setLoadError]=useState('');
   const [discardPaths,setDiscardPaths]=useState<string[]>([]);
   const [undo,setUndo]=useState<{stash:string;text:string}|null>(null);
+  const [menu,setMenu]=useState<Menu|null>(null);
+  const [tagTarget,setTagTarget]=useState<{sha:string;label:string}|null>(null);
+  const [tagName,setTagName]=useState('');
+  const [tagMessage,setTagMessage]=useState('');
+  const [tagPush,setTagPush]=useState(true);
+  const [delBranch,setDelBranch]=useState<{branch:string;scope:'local'|'remote'|'both';local?:string;remote?:string}|null>(null);
+  const [delForce,setDelForce]=useState(false);
+  const [delTag,setDelTag]=useState<{name:string;local:boolean;remote:boolean}|null>(null);
   const [selected,setSelected]=useState('');
   const [highlight,setHighlight]=useState('all');
   const [query,setQuery]=useState('');
@@ -197,7 +212,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
   function select(id:string,ensure=false){setSelected(id);setChoice(null);if(ensure)requestAnimationFrame(()=>scroll.current?.querySelector(`[data-sha="${id}"]`)?.scrollIntoView({block:'nearest',behavior:'smooth'}));}
   function reset(){setHighlight('all');setQuery('');setAuthor('all');}
   function jump(delta:number){const list=rows.filter(c=>matches.has(c.sha));const cur=showWip?WIP:shownCommit?.sha;const i=list.findIndex(c=>c.sha===cur);const next=list[Math.max(0,Math.min(list.length-1,i+delta))];if(next)select(next.sha,true);}
-  useEffect(()=>{function key(e:KeyboardEvent){if(!activeRef.current||dialog||(e.target as HTMLElement).closest('input,textarea,select'))return;if(e.key==='/'){e.preventDefault();search.current?.focus();}if(e.key==='Escape'&&choice)setChoice(null);if(e.key==='ArrowDown'){e.preventDefault();jump(1);}if(e.key==='ArrowUp'){e.preventDefault();jump(-1);}}window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);});
+  useEffect(()=>{function key(e:KeyboardEvent){if(menu&&e.key==='Escape'){setMenu(null);return;}if(!activeRef.current||dialog||(e.target as HTMLElement).closest('input,textarea,select'))return;if(e.key==='/'){e.preventDefault();search.current?.focus();}if(e.key==='Escape'&&choice)setChoice(null);if(e.key==='ArrowDown'){e.preventDefault();jump(1);}if(e.key==='ArrowUp'){e.preventDefault();jump(-1);}}window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);});
   useEffect(()=>{if(!dialog)return;const prev=document.activeElement as HTMLElement;const controls=()=>[...(modal.current?.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],input,textarea,select')||[])];(modal.current?.querySelector<HTMLElement>('[data-autofocus]')||controls()[1]||controls()[0])?.focus();const key=(e:KeyboardEvent)=>{if(e.key==='Escape'&&!busyRef.current)setDialog(null);if(e.key==='Tab'){const list=controls(),first=list[0],last=list[list.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}};window.addEventListener('keydown',key);return()=>{window.removeEventListener('keydown',key);prev?.focus?.();};},[dialog]);
 
   async function action(name:string,body:unknown={},success='Operação concluída.'):Promise<any>{
@@ -212,7 +227,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
     else setToast(ok);
   }
   async function commit(){if(!s)return;const text=message.trim()+(description.trim()?'\n\n'+description.trim():'');if(await action('commit',{message:text,expectedHead:s.head,expectedIndex:s.indexFingerprint},s.merging?'Merge concluído.':'Commit criado.')){setMessage('');setDescription('');setChoice(null);setSelected('');}}
-  async function copy(text:string){try{await navigator.clipboard.writeText(text);setToast('Hash copiado.');}catch{setToast('Não foi possível copiar.');}}
+  async function copy(text:string,done='Hash copiado.'){try{await navigator.clipboard.writeText(text);setToast(done);}catch{setToast('Não foi possível copiar.');}}
   function openMerge(name='',dest=''){const d=dest&&dest!==s?.branch?dest:'';setInto(d);setTarget(name||allBranches.find(b=>b.name!==(d||s?.branch))?.name||'');setDialog('merge');}
   // Checkout direto, sem diálogo: o servidor troca para a local quando ela já existe.
   async function openSwitch(name:string){if(!name||name===s?.branch)return;if(await action('switch',{branch:name},`Agora em ${name}.`)){setSelected('');reset();}}
@@ -231,6 +246,52 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
   async function runBranch(e:React.FormEvent){e.preventDefault();const from=branchFrom==='selected'&&shownCommit?shownCommit.sha:undefined;if(await action('branch',{name:branchName,from,checkout:branchCheckout},`Branch ${branchName.trim()} criada.`)){setDialog(null);setSelected('');}}
   async function resolve(path:string,side:'ours'|'theirs'|'mark'|'content',content?:string){const ok=await action('resolve',{path,side,content},side==='mark'||side==='content'?`${path} resolvido.`:side==='ours'?'Mantida a sua versão.':'Mantida a versão recebida.');if(ok){const next=conflicts.find(f=>f.path!==path);setChoice(next?{path:next.path,staged:false,conflicted:true}:{path,staged:true});}}
 
+  // ---- Menu do botão direito: branches, tags e commits ----
+  const mainRemote=()=>s?(s.remote&&s.remote!=='.'?s.remote:s.remotes.includes('origin')?'origin':s.remotes[0]||''):'';
+  function openMenu(e:React.MouseEvent,title:string,items:MenuItem[]){e.preventDefault();e.stopPropagation();const h=items.reduce((n,i)=>n+(i==='sep'?9:29),36);setMenu({x:Math.min(e.clientX,window.innerWidth-260),y:Math.max(8,Math.min(e.clientY,window.innerHeight-h-8)),title,items});}
+  function openTag(sha:string,label:string){if(!s)return;setTagTarget({sha,label});setTagName(nextTag(s.lastTag,s.tags.map(t=>t.name)));setTagMessage('');setTagPush(s.remotes.length>0);setDialog('tag');}
+  function openDeleteBranch(branch:string,scope:'local'|'remote'|'both',local?:string,remote?:string){setDelBranch({branch,scope,local,remote});setDelForce(false);setDialog('delete-branch');}
+  function openDeleteTag(name:string,local:boolean,remote:boolean){setDelTag({name,local,remote});setDialog('delete-tag');}
+  function branchMenu(e:React.MouseEvent,name:string){
+    if(!s)return;const b=allBranches.find(x=>x.name===name);if(!b)return;
+    const localName=b.remote?b.name.slice(remoteOf(b.name).length+1):b.name;
+    const local=localBranches.find(x=>x.name===localName)?.name;
+    const remote=b.remote?b.name:[mainRemote(),...s.remotes].map(r=>`${r}/${b.name}`).find(n=>remoteBranches.some(x=>x.name===n));
+    const isCurrent=!b.remote&&b.name===s.branch,localIsCurrent=!!local&&local===s.branch;
+    const items:MenuItem[]=[];
+    if(!isCurrent)items.push({label:`Checkout de ${b.name}`,icon:<Laptop size={13}/>,disabled:!!busy,run:()=>openSwitch(b.name)});
+    if(!isCurrent&&s.branch)items.push({label:`Merge em ${s.branch}`,icon:<GitMerge size={13}/>,disabled:!!busy||!!s.merging,run:()=>openMerge(b.name)});
+    if(items.length)items.push('sep');
+    items.push({label:'Criar tag aqui…',icon:<Tag size={13}/>,disabled:!!busy,run:()=>openTag(b.sha,b.name)});
+    items.push({label:'Copiar nome',icon:<Copy size={13}/>,run:()=>copy(b.name,'Nome copiado.')});
+    items.push('sep');
+    if(local)items.push({label:`Apagar branch local (${local})`,icon:<Trash2 size={13}/>,danger:true,disabled:!!busy||localIsCurrent,title:localIsCurrent?'É a branch atual: faça checkout de outra antes.':undefined,run:()=>openDeleteBranch(b.name,'local',local,remote)});
+    if(remote)items.push({label:`Apagar no remoto (${remote})`,icon:<Cloud size={13}/>,danger:true,disabled:!!busy,run:()=>openDeleteBranch(b.name,'remote',local,remote)});
+    if(local&&remote)items.push({label:'Apagar local e no remoto',icon:<Trash2 size={13}/>,danger:true,disabled:!!busy||localIsCurrent,title:localIsCurrent?'É a branch atual: faça checkout de outra antes.':undefined,run:()=>openDeleteBranch(b.name,'both',local,remote)});
+    openMenu(e,b.remote?`Branch remota ${b.name}`:`Branch ${b.name}`,items);
+  }
+  function tagMenu(e:React.MouseEvent,name:string,sha:string){
+    if(!s)return;const r=mainRemote();
+    openMenu(e,`Tag ${name}`,[
+      {label:r?`Push para ${r}`:'Push (sem remoto)',icon:<Send size={13}/>,disabled:!!busy||!r,run:()=>action('tag-push',{name},`Tag ${name} enviada.`)},
+      {label:'Localizar no grafo',icon:<Search size={13}/>,disabled:!layout.cols.has(sha),run:()=>select(sha,true)},
+      {label:'Copiar nome',icon:<Copy size={13}/>,run:()=>copy(name,'Nome copiado.')},
+      'sep',
+      {label:'Apagar local',icon:<Trash2 size={13}/>,danger:true,disabled:!!busy,run:()=>openDeleteTag(name,true,false)},
+      {label:r?`Apagar no remoto (${r})`:'Apagar no remoto',icon:<Cloud size={13}/>,danger:true,disabled:!!busy||!r,run:()=>openDeleteTag(name,false,true)},
+      {label:'Apagar local e no remoto',icon:<Trash2 size={13}/>,danger:true,disabled:!!busy||!r,run:()=>openDeleteTag(name,true,true)},
+    ]);
+  }
+  function commitMenu(e:React.MouseEvent,c:Commit){
+    openMenu(e,`Commit ${short(c.sha)}`,[
+      {label:'Criar tag aqui…',icon:<Tag size={13}/>,disabled:!!busy,run:()=>openTag(c.sha,short(c.sha))},
+      {label:'Criar branch aqui…',icon:<GitBranchPlus size={13}/>,disabled:!!busy,run:()=>{select(c.sha);setBranchName('');setBranchFrom('selected');setBranchCheckout(true);setDialog('branch');}},
+      {label:'Copiar hash',icon:<Copy size={13}/>,run:()=>copy(c.sha)},
+    ]);
+  }
+  async function runTag(e:React.FormEvent){e.preventDefault();if(!tagTarget)return;const name=tagName.trim();if(await action('tag',{name,sha:tagTarget.sha,message:tagMessage,push:tagPush},`Tag ${name} criada.`))setDialog(null);}
+  async function runDeleteBranch(){if(!delBranch)return;if(await action('branch-delete',{branch:delBranch.branch,scope:delBranch.scope,force:delForce},'Branch apagada.')){setDialog(null);if(highlight===delBranch.local||highlight===delBranch.remote)setHighlight('all');}}
+  async function runDeleteTag(){if(!delTag)return;if(await action('tag-delete',delTag,'Tag apagada.'))setDialog(null);}
   function openDiscard(paths:string[]){if(!paths.length)return;setDiscardPaths(paths);setDialog('discard');}
   async function runDiscard(){const r=await action('discard',{paths:discardPaths},'Alterações descartadas.');if(r){setDialog(null);if(choice&&discardPaths.includes(choice.path))setChoice(null);if(r.output?.stash){setToast('');setUndo({stash:r.output.stash,text:r.output.message});}}}
   async function undoDiscard(){if(!undo)return;const stash=undo.stash;setUndo(null);await action('undo-discard',{stash},'Descarte desfeito.');}
@@ -245,7 +306,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
   const remotesGrouped=s.remotes.map(r=>({remote:r,list:remoteBranches.filter(b=>remoteOf(b.name)===r&&b.name.toLocaleLowerCase().includes(sf))}));
   const laneOfBranch=(sha:string)=>layout.cols.get(sha);
 
-  const branchItem=(b:BranchRef)=>{const cur=!b.remote&&b.name===s.branch;const lane=laneOfBranch(b.sha);const text=b.remote?b.name.slice(remoteOf(b.name).length+1):b.name;return <div key={b.name} {...dnd(b.name)} className={`side-branch ${cur?'current':''} ${highlight===b.name?'highlighted':''} ${dropOn===b.name?'drop':''} ${drag===b.name?'dragging':''}`} style={{'--lane':lane===undefined?'#5b6670':color(lane)} as CSSProperties}>
+  const branchItem=(b:BranchRef)=>{const cur=!b.remote&&b.name===s.branch;const lane=laneOfBranch(b.sha);const text=b.remote?b.name.slice(remoteOf(b.name).length+1):b.name;return <div key={b.name} {...dnd(b.name)} onContextMenu={e=>branchMenu(e,b.name)} className={`side-branch ${cur?'current':''} ${highlight===b.name?'highlighted':''} ${dropOn===b.name?'drop':''} ${drag===b.name?'dragging':''}`} style={{'--lane':lane===undefined?'#5b6670':color(lane)} as CSSProperties}>
     <button className="side-branch-main" title={`${b.name}\nClique: localizar no grafo · Duplo clique: checkout · Arraste sobre outra branch: merge`} onClick={()=>{if(layout.cols.has(b.sha))select(b.sha,true);}} onDoubleClick={()=>openSwitch(b.name)}>
       {cur?<Check size={13} className="cur-check"/>:<span className="lane-dot"/>}<span className="side-branch-name">{text}</span>
       {dropOn===b.name&&drag&&<span className="drop-hint">soltar: merge de {drag}</span>}
@@ -260,7 +321,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
   </div>;};
 
   const pill=(l:Label,row:number)=>{const lane=layout.cols.get(l.sha)??0;const ref=l.local||l.remote;return <span key={l.key} {...(ref?dnd(ref):{})} className={`ref-pill ${l.current?'current':''} ${l.tag?'tag':''} ${ref&&dropOn===ref?'drop':''}`} style={{'--lane':color(lane)} as CSSProperties} title={[l.local&&`Local: ${l.local}`,l.remote&&`Remota: ${l.remote}`,l.tag&&`Tag: ${l.text}`,l.current&&'(branch atual · HEAD)'].filter(Boolean).join('\n')}
-    onDoubleClick={e=>{e.stopPropagation();if(l.local||l.remote)openSwitch(l.local||l.remote!);}} data-row={row}>
+    onDoubleClick={e=>{e.stopPropagation();if(l.local||l.remote)openSwitch(l.local||l.remote!);}} onContextMenu={e=>l.tag?tagMenu(e,l.text,l.sha):branchMenu(e,l.local||l.remote!)} data-row={row}>
     {l.current&&<Check size={11} className="pill-check"/>}
     {l.tag?<Tag size={11}/>:null}
     <span className="pill-text">{l.text}</span>
@@ -311,7 +372,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
       <div className="author-line"><span className="avatar" style={{'--lane':color(layout.cols.get(shownCommit.sha)||0)} as CSSProperties}>{initials(shownCommit.author)}</span><div><b>{shownCommit.author}</b><span>{fmt(shownCommit.date,true)}</span></div></div>
       <div className="parents">pais: {shownCommit.parents.length?shownCommit.parents.map(p=><button key={p} disabled={!layout.cols.has(p)} onClick={()=>select(p,true)}><code>{short(p)}</code></button>):<span className="muted">nenhum (commit inicial)</span>}</div>
       {(labels.get(shownCommit.sha)||[]).length>0&&<div className="commit-refs">{(labels.get(shownCommit.sha)||[]).map(l=><div key={l.key} className="commit-ref">{pill(l,-1)}{!l.tag&&!l.current&&<><button className="btn ghost xs" disabled={!!busy} onClick={()=>openSwitch(l.local||l.remote!)}>Checkout</button>{s.branch&&<button className="btn ghost xs" disabled={!!busy} onClick={()=>openMerge(l.local||l.remote!)}>Merge em {s.branch}</button>}</>}</div>)}</div>}
-      <div className="commit-actions"><button className="btn ghost sm" disabled={!!busy} onClick={()=>openBranch(true)}><GitBranchPlus size={13}/>Criar branch aqui</button></div>
+      <div className="commit-actions"><button className="btn ghost sm" disabled={!!busy} onClick={()=>openBranch(true)}><GitBranchPlus size={13}/>Criar branch aqui</button><button className="btn ghost sm" disabled={!!busy} onClick={()=>openTag(shownCommit.sha,short(shownCommit.sha))}><Tag size={13}/>Criar tag aqui</button></div>
     </div>
     <div className="tabs"><button className={tab==='files'?'on':''} onClick={()=>setTab('files')}>Arquivos{commitFiles&&!commitFiles.merge&&<span className="count">{commitFiles.files.length}</span>}</button><button className={tab==='info'?'on':''} onClick={()=>setTab('info')}>Detalhes</button></div>
     {tab==='files'?<div className="file-group">{!commitFiles?<p className="files-empty">Carregando…</p>:commitFiles.merge?<p className="files-empty">Commit de merge. Selecione um dos pais para ver as alterações.</p>:commitFiles.files.map(f=>{const [dir,name]=splitPath(f.path);return <div key={f.path} className={`file-row ${choice?.sha===shownCommit.sha&&choice.path===f.path?'active':''}`}><span className="st st-mod">M</span><button className="file-name" title={f.path} onClick={()=>setChoice({path:f.path,staged:false,sha:shownCommit.sha})}><span className="fn">{name}</span><span className="fd">{dir}</span></button><span className="numstat">{f.binary?'bin':<><b className="plus">+{f.additions}</b><b className="minus">−{f.deletions}</b></>}</span></div>;})}</div>
@@ -349,7 +410,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
         <div className="side-scroll">
           {sideSection('local',<><Laptop size={13}/>LOCAL</>,localBranches.length,localBranches.filter(b=>b.name.toLocaleLowerCase().includes(sf)).map(branchItem))}
           {sideSection('remote',<><Cloud size={13}/>REMOTE</>,remoteBranches.length,remotesGrouped.map(g=><div key={g.remote} className="remote-group"><button className="remote-name" onClick={()=>setCollapsed(c=>({...c,['r:'+g.remote]:!c['r:'+g.remote]}))}>{collapsed['r:'+g.remote]?<ChevronRight size={12}/>:<ChevronDown size={12}/>}<Cloud size={12}/>{g.remote}</button>{!collapsed['r:'+g.remote]&&g.list.map(branchItem)}</div>))}
-          {sideSection('tags',<><Tag size={13}/>TAGS</>,s.tags.length,s.tags.filter(t=>t.name.toLocaleLowerCase().includes(sf)).map(t=><button key={t.name} className="side-tag" onClick={()=>{if(layout.cols.has(t.sha))select(t.sha,true);}}><Tag size={11}/>{t.name}</button>))}
+          {sideSection('tags',<><Tag size={13}/>TAGS</>,s.tags.length,s.tags.filter(t=>t.name.toLocaleLowerCase().includes(sf)).map(t=><button key={t.name} className="side-tag" title={`${t.name}\nBotão direito: push ou apagar`} onContextMenu={e=>tagMenu(e,t.name,t.sha)} onClick={()=>{if(layout.cols.has(t.sha))select(t.sha,true);}}><Tag size={11}/>{t.name}</button>))}
         </div>
         <div className="side-foot"><span className={`work-state ${s.files.length?'dirty':'clean'}`}><span/>{s.files.length?`${s.files.length} ${s.files.length===1?'alteração':'alterações'} não commitadas`:'Área de trabalho limpa'}</span></div>
       </aside>
@@ -373,12 +434,13 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
               {rows.map((c,i)=>{const lane=layout.cols.get(c.sha)||0;const isWip=c.sha===WIP;const sel=isWip?showWip:c.sha===shownCommit?.sha;const ls=labels.get(c.sha)||[];const isHead=c.sha===s.head;return <div key={c.sha} data-sha={c.sha} role="button" tabIndex={-1}
                 className={`row ${sel?'selected':''} ${matches.has(c.sha)?'':'dim'} ${headChain.has(c.sha)?'on-head':''} ${isWip?'wip':''}`}
                 style={{top:i*rowH,height:rowH,gridTemplateColumns:`${refW}px ${graphW}px minmax(200px,1fr) 150px 120px 76px`,'--lane':color(lane)} as CSSProperties}
-                onClick={()=>select(c.sha)}>
+                onClick={()=>select(c.sha)} onContextMenu={e=>{if(!isWip)commitMenu(e,c);}}>
                 <span className={`refs ${ls.length>1?'multi':''}`}>{isWip?<span className="ref-pill wip-pill" style={{'--lane':color(lane)} as CSSProperties}><Pencil size={11}/><span className="pill-text">WIP</span></span>:<>{ls.slice(0,1).map(l=>pill(l,i))}{ls.length>1&&<span className="more">+{ls.length-1}</span>}
                   {ls.length>1&&<span className={`refs-pop ${i>=4&&i>=rows.length-4?'up':''}`} onClick={e=>e.stopPropagation()} onDoubleClick={e=>e.stopPropagation()}>
                     <span className="refs-pop-title">{ls.length} referências neste commit · clique para fazer checkout</span>
                     {ls.map(l=>{const ref=l.local||l.remote;return <button key={l.key} type="button" {...(ref?dnd(ref):{})} className={`refs-pop-item ${l.current?'current':''}`} disabled={!!busy||l.current} style={{'--lane':color(lane)} as CSSProperties}
                       title={ref?(l.current?`${l.text} é a branch atual`:`Checkout de ${ref} · arraste sobre outra branch para fazer merge`):`Tag ${l.text}`}
+                      onContextMenu={e=>l.tag?tagMenu(e,l.text,l.sha):branchMenu(e,ref!)}
                       onClick={()=>{if(ref)void openSwitch(ref);else select(l.sha,true);}}>
                       {l.current?<Check size={12}/>:l.tag?<Tag size={12}/>:l.local?<Laptop size={12}/>:<Cloud size={12}/>}
                       <span className="refs-pop-name">{l.text}</span>
@@ -438,12 +500,35 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
         {s.files.some(f=>!f.untracked)&&<div className="inline-error">Faça commit das alterações locais antes do pull.</div>}
         <pre className="cmd">{pullMode==='ff'?'git pull --ff-only':'git pull --no-rebase --no-edit'}</pre>
         <div className="modal-actions"><button className="btn ghost" onClick={()=>setDialog(null)} disabled={!!busy}>Cancelar</button><button className="btn primary" data-autofocus disabled={!!busy||!s.upstream||s.files.some(f=>!f.untracked)} onClick={runPull}>{busy==='pull'?'Atualizando…':'Pull'}</button></div></>}
+      {dialog==='tag'&&tagTarget&&(()=>{const name=tagName.trim();const exists=s.tags.some(t=>t.name===name);const r=mainRemote();const suggestion=nextTag(s.lastTag,s.tags.map(t=>t.name));return <form onSubmit={runTag}><h2 id="dialog-title"><Tag size={17}/>Nova tag em <span className="hl">{tagTarget.label}</span></h2>
+        <label className="field"><span>Nome</span><input data-autofocus value={tagName} onChange={e=>setTagName(e.target.value.replace(/\s/g,''))} placeholder="v1.0.0" spellCheck={false} autoComplete="off"/></label>
+        {s.lastTag?<p className="muted small tag-hint">Última tag criada: <code>{s.lastTag}</code>{name!==suggestion&&!exists&&<> · <button type="button" className="linkish" onClick={()=>setTagName(suggestion)}>usar {suggestion}</button></>}</p>:<p className="muted small tag-hint">Ainda não há tags neste repositório.</p>}
+        {exists&&<div className="inline-error">A tag {name} já existe{name===s.lastTag?' (é a última criada)':''}. Mude o nome, por exemplo <button type="button" className="linkish" onClick={()=>setTagName(suggestion)}>{suggestion}</button>.</div>}
+        <label className="field"><span>Mensagem <span className="muted">(opcional: com mensagem vira tag anotada)</span></span><input value={tagMessage} maxLength={500} onChange={e=>setTagMessage(e.target.value)} placeholder={`Versão ${name.replace(/^v/,'')||'…'}`}/></label>
+        <label className="check"><input type="checkbox" checked={tagPush&&!!r} disabled={!r} onChange={e=>setTagPush(e.target.checked)}/>Enviar a tag para {r?<b>{r}</b>:'o remoto'} (push) logo depois de criar</label>
+        <pre className="cmd">{`git tag ${tagMessage.trim()?'-a -m "…" ':''}${name||'<nome>'} ${short(tagTarget.sha)}`}{tagPush&&r?`\ngit push ${r} refs/tags/${name||'<nome>'}`:''}</pre>
+        <div className="modal-actions"><button type="button" className="btn ghost" onClick={()=>setDialog(null)} disabled={!!busy}>Cancelar</button><button className="btn primary" type="submit" disabled={!!busy||!name||exists}>{busy==='tag'?'Criando…':tagPush&&r?'Criar tag e enviar':'Criar tag'}</button></div></form>;})()}
+      {dialog==='delete-branch'&&delBranch&&(()=>{const r=delBranch.remote?remoteOf(delBranch.remote):'';const rn=delBranch.remote?delBranch.remote.slice(r.length+1):'';const loc=delBranch.scope!=='remote',rem=delBranch.scope!=='local';return <><h2 id="dialog-title" className="danger-title"><Trash2 size={17}/>{delBranch.scope==='local'?'Apagar branch local':delBranch.scope==='remote'?'Apagar branch no remoto':'Apagar branch local e no remoto'}</h2>
+        <ul className="conflict-list discard-list">{loc&&<li><Laptop size={13}/><code>{delBranch.local}</code><span className="muted">local, só neste computador</span></li>}{rem&&<li><Cloud size={13}/><code>{delBranch.remote}</code><span className="muted">no servidor, some para todo o time</span></li>}</ul>
+        {rem&&<p className="modal-text">Quem já tem essa branch continua com a cópia local, mas ela deixa de existir em {r}.</p>}
+        <label className="check"><input type="checkbox" checked={delForce} onChange={e=>setDelForce(e.target.checked)}/>Apagar mesmo assim, ainda que os commits dela não estejam em nenhuma outra branch</label>
+        <pre className="cmd">{[rem&&`git push ${r} --delete ${rn}`,loc&&`git branch -D ${delBranch.local}`].filter(Boolean).join('\n')}</pre>
+        <div className="modal-actions"><button className="btn ghost" data-autofocus onClick={()=>setDialog(null)} disabled={!!busy}>Cancelar</button><button className="btn danger-solid" disabled={!!busy} onClick={runDeleteBranch}><Trash2 size={13}/>{busy==='branch-delete'?'Apagando…':'Apagar'}</button></div></>;})()}
+      {dialog==='delete-tag'&&delTag&&(()=>{const r=mainRemote();return <><h2 id="dialog-title" className="danger-title"><Trash2 size={17}/>Apagar a tag <span className="hl">{delTag.name}</span></h2>
+        <ul className="conflict-list discard-list">{delTag.local&&<li><Laptop size={13}/><code>{delTag.name}</code><span className="muted">local, só neste computador</span></li>}{delTag.remote&&<li><Cloud size={13}/><code>{delTag.name}</code><span className="muted">no {r}, some para todo o time</span></li>}</ul>
+        {!delTag.local&&<p className="modal-text">A tag continua aqui. Dá para enviar de novo depois com Push.</p>}
+        <pre className="cmd">{[delTag.remote&&`git push ${r} --delete refs/tags/${delTag.name}`,delTag.local&&`git tag -d ${delTag.name}`].filter(Boolean).join('\n')}</pre>
+        <div className="modal-actions"><button className="btn ghost" data-autofocus onClick={()=>setDialog(null)} disabled={!!busy}>Cancelar</button><button className="btn danger-solid" disabled={!!busy} onClick={runDeleteTag}><Trash2 size={13}/>{busy==='tag-delete'?'Apagando…':'Apagar'}</button></div></>;})()}
       {dialog==='discard'&&<><h2 id="dialog-title" className="danger-title"><Trash2 size={17}/>Descartar {discardPaths.length===1?'alterações do arquivo':`alterações de ${discardPaths.length} arquivos`}</h2><p className="modal-text">{discardPaths.length===1?'O arquivo volta':'Os arquivos voltam'} a ficar como no último commit. Arquivos novos são removidos e arquivos apagados voltam. Vale tanto para o que está em Staged quanto para o que está em Unstaged.</p><ul className="conflict-list discard-list">{discardPaths.slice(0,12).map(p=>{const f=s.files.find(x=>x.path===p);const st=f?statusLetter(f,!f.unstaged):null;return <li key={p}>{st&&<span className={`st ${st.cls}`} title={st.title}>{st.letter}</span>}<code>{p}</code></li>;})}{discardPaths.length>12&&<li className="muted">e mais {discardPaths.length-12}…</li>}</ul><p className="muted small"><Undo2 size={12}/> Dá para desfazer logo depois pelo aviso que aparece embaixo. As alterações também ficam guardadas no stash do Git como "Briar: descartado…".</p><div className="modal-actions"><button className="btn ghost" data-autofocus onClick={()=>setDialog(null)} disabled={!!busy}>Cancelar</button><button className="btn danger-solid" disabled={!!busy} onClick={runDiscard}><Trash2 size={13}/>{busy==='discard'?'Descartando…':'Descartar'}</button></div></>}
       {dialog==='operations'&&<><h2 id="dialog-title"><Terminal size={17}/>Operações Git desta sessão</h2><div className="audit">{s.audit.length?s.audit.map((a,i)=><div className="audit-entry" key={a.date+i}><span className={a.success?'plus':'minus'}>{a.success?'ok':'falhou'} · {new Date(a.date).toLocaleTimeString('pt-BR')}</span><code>{a.command}</code>{a.output&&<pre>{a.output}</pre>}</div>):<p className="muted">Nenhuma operação executada ainda.</p>}</div></>}
-      {dialog==='help'&&<><h2 id="dialog-title"><CircleHelp size={17}/>Como usar</h2><div className="help"><p><b>Grafo:</b> cada coluna é uma linha de desenvolvimento. A branch atual fica na primeira coluna, com traço mais grosso e rótulo destacado com <Check size={11}/>. <Laptop size={11}/> = local, <Cloud size={11}/> = remota.</p><p><b>// WIP:</b> linha no topo com seus arquivos ainda não commitados. Clique nela para fazer stage e commit no painel à direita.</p><p><b>Branches:</b> clique para localizar no grafo; duplo clique faz checkout (se a branch local já existe, o Briar troca para ela e a atualiza com o remoto). <b>Arraste uma branch sobre outra</b> (na lateral, no grafo ou no seletor de branch do topo) para abrir o merge.</p><p><b>Merge:</b> mostra antes quais arquivos terão conflito. Se houver, cada arquivo aparece em "Conflitos" e o aviso vermelho fica no topo até alguém resolver: escolha trecho a trecho a sua versão, a recebida ou as duas, ou edite no editor e marque como resolvido. Depois clique em <b>Concluir merge</b> — ou <b>Abortar</b> para voltar ao estado anterior.</p><p><b>Pull / Push / Fetch:</b> usam a autenticação Git já configurada. Nunca há force push.</p><p><kbd>/</kbd> busca · <kbd>↑</kbd><kbd>↓</kbd> navegam · <kbd>esc</kbd> fecha.</p></div></>}
+      {dialog==='help'&&<><h2 id="dialog-title"><CircleHelp size={17}/>Como usar</h2><div className="help"><p><b>Grafo:</b> cada coluna é uma linha de desenvolvimento. A branch atual fica na primeira coluna, com traço mais grosso e rótulo destacado com <Check size={11}/>. <Laptop size={11}/> = local, <Cloud size={11}/> = remota.</p><p><b>// WIP:</b> linha no topo com seus arquivos ainda não commitados. Clique nela para fazer stage e commit no painel à direita.</p><p><b>Branches:</b> clique para localizar no grafo; duplo clique faz checkout (se a branch local já existe, o Briar troca para ela e a atualiza com o remoto). <b>Arraste uma branch sobre outra</b> (na lateral, no grafo ou no seletor de branch do topo) para abrir o merge.</p><p><b>Merge:</b> mostra antes quais arquivos terão conflito. Se houver, cada arquivo aparece em "Conflitos" e o aviso vermelho fica no topo até alguém resolver: escolha trecho a trecho a sua versão, a recebida ou as duas, ou edite no editor e marque como resolvido. Depois clique em <b>Concluir merge</b> — ou <b>Abortar</b> para voltar ao estado anterior.</p><p><b>Botão direito</b> numa branch, tag ou commit abre o menu: criar tag (já sugere o próximo número), push de tag e apagar branch ou tag, local ou no remoto.</p><p><b>Pull / Push / Fetch:</b> usam a autenticação Git já configurada. Nunca há force push.</p><p><kbd>/</kbd> busca · <kbd>↑</kbd><kbd>↓</kbd> navegam · <kbd>esc</kbd> fecha.</p></div></>}
       {error&&<div className="inline-error" role="alert">{error}<button aria-label="Dispensar" onClick={()=>setError('')}><X size={13}/></button></div>}
     </div></div>}
     {error&&!dialog&&<div className="error-toast" role="alert"><CircleAlert size={15}/><span>{error}</span><button aria-label="Dispensar erro" onClick={()=>setError('')}><X size={14}/></button></div>}
+    {menu&&<div className="ctx-backdrop" onMouseDown={()=>setMenu(null)} onContextMenu={e=>{e.preventDefault();setMenu(null);}}><div className="ctx-menu" role="menu" style={{left:menu.x,top:menu.y}} onMouseDown={e=>e.stopPropagation()}>
+      <div className="ctx-title">{menu.title}</div>
+      {menu.items.map((it,i)=>it==='sep'?<div key={i} className="ctx-sep"/>:<button key={i} role="menuitem" className={`ctx-item ${it.danger?'danger':''}`} disabled={it.disabled} title={it.title} onClick={()=>{setMenu(null);it.run();}}>{it.icon}<span>{it.label}</span></button>)}
+    </div></div>}
     {toast&&!undo&&<div className="toast" role="status"><Check size={15}/>{toast}</div>}
     {undo&&<div className="toast undo-toast" role="status"><Trash2 size={15}/>{undo.text}<button className="btn ghost sm" disabled={!!busy} onClick={undoDiscard}><Undo2 size={13}/>Desfazer</button><button aria-label="Dispensar" onClick={()=>setUndo(null)}><X size={13}/></button></div>}
   </div>;

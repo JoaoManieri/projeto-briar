@@ -364,3 +364,18 @@ kbd{font-size:10px;border:1px solid var(--line-2);border-radius:3px;padding:0 4p
 .undo-toast{background:#2b2a20;color:#f0e2b6;border-color:#e8b54d66}
 .undo-toast button:last-child{color:inherit;margin-left:2px}
 .shell>.welcome[hidden]{display:none}
+
+/* menu do botão direito */
+.ctx-backdrop{position:fixed;inset:0;z-index:80}
+.ctx-menu{position:fixed;min-width:230px;max-width:340px;background:#252b33;border:1px solid var(--line-2);border-radius:8px;box-shadow:0 12px 34px #000a;padding:5px;display:flex;flex-direction:column}
+.ctx-title{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);padding:5px 9px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctx-item{display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:5px;font-size:12.5px;color:var(--text);text-align:left;white-space:nowrap}
+.ctx-item span{overflow:hidden;text-overflow:ellipsis}
+.ctx-item svg{color:var(--muted);flex-shrink:0}
+.ctx-item:hover:not(:disabled){background:var(--bg-4)}
+.ctx-item.danger{color:#ff9b93}.ctx-item.danger svg{color:#ff8a82}
+.ctx-item.danger:hover:not(:disabled){background:#e5675f26}
+.ctx-item:disabled{opacity:.4;cursor:default}
+.ctx-sep{height:1px;background:var(--line-2);margin:4px 2px}
+.tag-hint{margin:-4px 0 10px}
+.discard-list li .muted{margin-left:auto;font-size:11px}
