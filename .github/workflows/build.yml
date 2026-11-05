@@ -30,6 +30,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # A versão do package.json é a que vai no instalador e no latest*.yml lido pelo atualizador:
+      # se não bater com a tag, os clientes não enxergam a versão nova.
+      - if: startsWith(github.ref, 'refs/tags/')
+        run: node -e "const v=require('./package.json').version,t=process.env.GITHUB_REF_NAME;if(t!=='v'+v){console.error('Tag '+t+' nao bate com package.json ('+v+'). Rode npm version antes de criar a tag.');process.exit(1)}"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
