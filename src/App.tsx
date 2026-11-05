@@ -1,6 +1,6 @@
 import {useCallback,useEffect,useMemo,useRef,useState,type CSSProperties,type ReactNode} from 'react';
 import {
-  ArrowDown,ArrowDownToLine,Download,LoaderCircle,RotateCw,ArrowLeft,ArrowUp,ArrowUpToLine,Check,ChevronDown,ChevronRight,CircleAlert,CircleHelp,Cloud,Copy,
+  Archive,ArchiveRestore,ArrowDown,ArrowDownToLine,Download,LoaderCircle,RotateCw,ArrowLeft,ArrowUp,ArrowUpToLine,Check,ChevronDown,ChevronRight,CircleAlert,CircleHelp,Cloud,Copy,
   FileCode2,FolderGit2,GitBranch,GitBranchPlus,GitCommitHorizontal,GitMerge,Laptop,LockKeyhole,Maximize2,Minus,Pencil,Plus,
   RefreshCw,Search,Send,Sprout,Tag,Terminal,Trash2,TriangleAlert,Undo2,X
 } from 'lucide-react';
@@ -8,9 +8,10 @@ import {ancestors,layoutGraph,palette,type History,type Commit} from './history'
 
 type FileState={path:string;oldPath?:string;index:string;worktree:string;staged:boolean;unstaged:boolean;untracked:boolean;conflicted:boolean};
 type BranchRef={name:string;sha:string;remote:boolean};
-type Status={root:string;lastTag:string|null;branch:string|null;head:string|null;files:FileState[];merging:{message:string;source?:string|null}|null;branches:BranchRef[];tags:{name:string;sha:string}[];upstream:string|null;ahead:number;behind:number;remote:string|null;remotes:string[];lastFetch:string|null;autoFetchError:string|null;indexFingerprint:string;conflicted:boolean;audit:{command:string;output:string;date:string;success:boolean}[]};
+type Stash={sha:string;index:number;base:string|null;untracked:boolean;date:string;branch:string|null;message:string};
+type Status={root:string;lastTag:string|null;branch:string|null;head:string|null;files:FileState[];merging:{message:string;source?:string|null}|null;branches:BranchRef[];tags:{name:string;sha:string}[];upstream:string|null;ahead:number;behind:number;remote:string|null;remotes:string[];lastFetch:string|null;autoFetchError:string|null;stashes:Stash[];indexFingerprint:string;conflicted:boolean;audit:{command:string;output:string;date:string;success:boolean}[]};
 type State={status:Status|null;history:(History&{truncated?:boolean})|null;initialError:string};
-type Dialog='operations'|'help'|'branch'|'merge'|'push'|'pull'|'discard'|'tag'|'delete-branch'|'delete-tag'|null;
+type Dialog='operations'|'help'|'branch'|'merge'|'push'|'pull'|'discard'|'tag'|'delete-branch'|'delete-tag'|'stash'|'stash-branch'|null;
 type MenuItem={label:string;icon?:ReactNode;danger?:boolean;disabled?:boolean;title?:string;run:()=>void}|'sep';
 type Menu={x:number;y:number;title:string;items:MenuItem[]};
 // Próxima versão a partir da última tag: v1.0.4 → v1.0.5 (soma 1 no último número), sem repetir uma existente.
@@ -19,7 +20,7 @@ function nextTag(last:string|null,existing:string[]){
   let next=last?bump(last):'v1.0.0';for(let i=0;i<500&&existing.includes(next);i++)next=bump(next);return next;
 }
 type Workspace={tabs:{root:string;name:string}[];active:string|null;recent:{root:string;name:string;open:boolean}[];initialError:string};
-type Choice={path:string;staged:boolean;sha?:string;conflicted?:boolean};
+type Choice={path:string;staged:boolean;sha?:string;conflicted?:boolean;stash?:boolean};
 type Label={key:string;text:string;local?:string;remote?:string;tag?:boolean;current:boolean;sha:string};
 type Preview={branch:string;current:string|null;into:string;needsCheckout:boolean;intoRemote:boolean;incoming:number;fastForward:boolean;conflicts:string[]};
 type Segment={type:'text';lines:string[]}|{type:'conflict';ours:string[];theirs:string[]};
@@ -106,7 +107,13 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
   const [state,setState]=useState<State|null>(null);
   const [loadError,setLoadError]=useState('');
   const [discardPaths,setDiscardPaths]=useState<string[]>([]);
-  const [undo,setUndo]=useState<{stash:string;text:string}|null>(null);
+  const [undo,setUndo]=useState<{stash:string;text:string;kind:'discard'|'drop';message?:string}|null>(null);
+  const [stashSel,setStashSel]=useState<string|null>(null);
+  const [stashFiles,setStashFiles]=useState<{path:string;additions:number;deletions:number;binary?:boolean;untracked?:boolean}[]|null>(null);
+  const [stashMsg,setStashMsg]=useState('');
+  const [stashUntracked,setStashUntracked]=useState(true);
+  const [stashStaged,setStashStaged]=useState(false);
+  const [stashTarget,setStashTarget]=useState<Stash|null>(null);
   const [menu,setMenu]=useState<Menu|null>(null);
   const [tagTarget,setTagTarget]=useState<{sha:string;label:string}|null>(null);
   const [tagName,setTagName]=useState('');
@@ -218,7 +225,9 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
   useEffect(()=>{if(undo){const t=setTimeout(()=>setUndo(null),15000);return()=>clearTimeout(t);}},[undo]);
   useEffect(()=>{if(toast){const t=setTimeout(()=>setToast(''),5000);return()=>clearTimeout(t);}},[toast]);
   useEffect(()=>{if(!shownCommit)return;setCommitFiles(null);const c=new AbortController();call('commit-files',{sha:shownCommit.sha},c.signal).then(setCommitFiles).catch(e=>{if(e.name!=='AbortError')setCommitFiles(null);});return()=>c.abort();},[shownCommit?.sha,s?.root]);
-  useEffect(()=>{if(!choice){setDiff('');return;}setDiff('Carregando diferenças…');const c=new AbortController();call('diff',{path:choice.path,staged:choice.staged,sha:choice.sha},c.signal).then(r=>setDiff(r.diff)).catch(e=>{if(e.name!=='AbortError')setDiff(e.message);});return()=>c.abort();},[choice,s?.indexFingerprint]);
+  const stashShown=stashSel?s?.stashes.find(x=>x.sha===stashSel)||null:null;
+  useEffect(()=>{if(!stashShown){setStashFiles(null);return;}setStashFiles(null);const c=new AbortController();call('stash-files',{sha:stashShown.sha},c.signal).then(r=>setStashFiles(r.files)).catch(e=>{if(e.name!=='AbortError')setStashFiles([]);});return()=>c.abort();},[stashShown?.sha]);
+  useEffect(()=>{if(!choice){setDiff('');return;}setDiff('Carregando diferenças…');const c=new AbortController();call('diff',{path:choice.path,staged:choice.staged,sha:choice.sha,stash:choice.stash},c.signal).then(r=>setDiff(r.diff)).catch(e=>{if(e.name!=='AbortError')setDiff(e.message);});return()=>c.abort();},[choice,s?.indexFingerprint]);
   useEffect(()=>{if(choice&&!choice.sha&&s&&!s.files.some(f=>f.path===choice.path))setChoice(null);},[s?.files]);
   useEffect(()=>{if(s?.merging&&!message)setMessage(subject(s.merging.message));},[s?.merging?.message]);
   useEffect(()=>{if(dialog!=='merge'||!target){setPreview(null);setPreviewError('');return;}setPreview(null);setPreviewError('');const c=new AbortController();call('merge-preview',{branch:target,into:into||undefined},c.signal).then(setPreview).catch(e=>{if(e.name!=='AbortError')setPreviewError(e.message);});return()=>c.abort();},[dialog,target,into,s?.head]);
@@ -226,7 +235,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
   useEffect(()=>{const list=s?.files.filter(f=>f.conflicted)||[];if(!s?.merging){autoOpened.current=false;return;}if(list.length&&!autoOpened.current){autoOpened.current=true;setSelected(WIP);setChoice({path:list[0].path,staged:false,conflicted:true});}},[s?.merging,s?.files]);
   useEffect(()=>{setRawConflict(false);},[choice?.path]);
 
-  function select(id:string,ensure=false){setSelected(id);setChoice(null);if(ensure)requestAnimationFrame(()=>scroll.current?.querySelector(`[data-sha="${id}"]`)?.scrollIntoView({block:'nearest',behavior:'smooth'}));}
+  function select(id:string,ensure=false){setSelected(id);setStashSel(null);setChoice(null);if(ensure)requestAnimationFrame(()=>scroll.current?.querySelector(`[data-sha="${id}"]`)?.scrollIntoView({block:'nearest',behavior:'smooth'}));}
   function reset(){setHighlight('all');setQuery('');setAuthor('all');}
   function jump(delta:number){const list=rows.filter(c=>matches.has(c.sha));const cur=showWip?WIP:shownCommit?.sha;const i=list.findIndex(c=>c.sha===cur);const next=list[Math.max(0,Math.min(list.length-1,i+delta))];if(next)select(next.sha,true);}
   useEffect(()=>{function key(e:KeyboardEvent){if(menu&&e.key==='Escape'){setMenu(null);return;}if(!activeRef.current||dialog||(e.target as HTMLElement).closest('input,textarea,select'))return;if(e.key==='/'){e.preventDefault();search.current?.focus();}if(e.key==='Escape'&&choice)setChoice(null);if(e.key==='ArrowDown'){e.preventDefault();jump(1);}if(e.key==='ArrowUp'){e.preventDefault();jump(-1);}}window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);});
@@ -240,7 +249,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
   }
   function afterMerge(r:any,ok:string){
     const list:string[]=r?.output?.conflicts||[];
-    if(list.length){setToast('');setError(`Conflitos em ${list.length} ${list.length===1?'arquivo':'arquivos'}. Resolva no painel à direita.`);setSelected(WIP);setChoice({path:list[0],staged:false,conflicted:true});}
+    if(list.length){setToast('');setStashSel(null);setError(`Conflitos em ${list.length} ${list.length===1?'arquivo':'arquivos'}. Resolva no painel à direita.`);setSelected(WIP);setChoice({path:list[0],staged:false,conflicted:true});}
     else setToast(ok);
   }
   async function commit(){if(!s)return;const text=message.trim()+(description.trim()?'\n\n'+description.trim():'');if(await action('commit',{message:text,expectedHead:s.head,expectedIndex:s.indexFingerprint},s.merging?'Merge concluído.':'Commit criado.')){setMessage('');setDescription('');setChoice(null);setSelected('');}}
@@ -310,8 +319,29 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
   async function runDeleteBranch(){if(!delBranch)return;if(await action('branch-delete',{branch:delBranch.branch,scope:delBranch.scope,force:delForce},'Branch apagada.')){setDialog(null);if(highlight===delBranch.local||highlight===delBranch.remote)setHighlight('all');}}
   async function runDeleteTag(){if(!delTag)return;if(await action('tag-delete',delTag,'Tag apagada.'))setDialog(null);}
   function openDiscard(paths:string[]){if(!paths.length)return;setDiscardPaths(paths);setDialog('discard');}
-  async function runDiscard(){const r=await action('discard',{paths:discardPaths},'Alterações descartadas.');if(r){setDialog(null);if(choice&&discardPaths.includes(choice.path))setChoice(null);if(r.output?.stash){setToast('');setUndo({stash:r.output.stash,text:r.output.message});}}}
-  async function undoDiscard(){if(!undo)return;const stash=undo.stash;setUndo(null);await action('undo-discard',{stash},'Descarte desfeito.');}
+  async function runDiscard(){const r=await action('discard',{paths:discardPaths},'Alterações descartadas.');if(r){setDialog(null);if(choice&&discardPaths.includes(choice.path))setChoice(null);if(r.output?.stash){setToast('');setUndo({stash:r.output.stash,text:r.output.message,kind:'discard'});}}}
+  async function undoDiscard(){if(!undo)return;const u=undo;setUndo(null);if(u.kind==='drop')await action('stash-restore',{sha:u.stash,message:u.message},'Stash recuperado.');else await action('undo-discard',{stash:u.stash},'Descarte desfeito.');}
+  // ---- Stash ----
+  const stashLabel=(x:Stash)=>`stash@{${x.index}}`;
+  function openStash(){setStashMsg('');setStashUntracked(true);setStashStaged(false);setDialog('stash');}
+  async function runStash(e:React.FormEvent){e.preventDefault();if(await action('stash-push',{message:stashMsg.trim()||`WIP em ${s?.branch||'HEAD'}`,untracked:stashUntracked,staged:stashStaged},'Alterações guardadas no stash.')){setDialog(null);setChoice(null);}}
+  async function applyStash(x:Stash,pop:boolean){const r=await action('stash-apply',{sha:x.sha,pop},pop?'Stash aplicado e removido.':'Stash aplicado.');if(!r)return;setChoice(null);setStashSel(null);setSelected(WIP);afterMerge(r,r.output?.message||'Stash aplicado.');}
+  async function dropStash(x:Stash){if(await action('stash-drop',{sha:x.sha},'Stash apagado.')){if(stashSel===x.sha){setStashSel(null);setChoice(null);}setToast('');setUndo({stash:x.sha,kind:'drop',message:x.message,text:`Stash "${x.message}" apagado.`});}}
+  function openStashBranch(x:Stash){setStashTarget(x);setBranchName('');setDialog('stash-branch');}
+  async function runStashBranch(e:React.FormEvent){e.preventDefault();if(!stashTarget)return;if(await action('stash-branch',{sha:stashTarget.sha,name:branchName},`Branch ${branchName.trim()} criada com o stash.`)){setDialog(null);setStashSel(null);setChoice(null);setSelected(WIP);}}
+  function showStash(x:Stash){setStashSel(x.sha);setChoice(null);}
+  function stashMenu(e:React.MouseEvent,x:Stash){
+    const blocked=!!busy||!!s?.merging||conflicts.length>0;const why=s?.merging?'Há um merge em andamento.':conflicts.length?'Resolva os conflitos atuais antes.':undefined;
+    openMenu(e,`${stashLabel(x)} · ${x.message}`,[
+      {label:'Pop (aplicar e remover)',icon:<ArchiveRestore size={13}/>,disabled:blocked,title:why,run:()=>applyStash(x,true)},
+      {label:'Aplicar (manter guardado)',icon:<Download size={13}/>,disabled:blocked,title:why,run:()=>applyStash(x,false)},
+      {label:'Ver arquivos',icon:<FileCode2 size={13}/>,run:()=>showStash(x)},
+      {label:'Criar branch com este stash…',icon:<GitBranchPlus size={13}/>,disabled:!!busy,run:()=>openStashBranch(x)},
+      {label:'Copiar hash',icon:<Copy size={13}/>,run:()=>copy(x.sha)},
+      'sep',
+      {label:'Apagar stash',icon:<Trash2 size={13}/>,danger:true,disabled:!!busy,run:()=>dropStash(x)},
+    ]);
+  }
   const brand=<span className="brand"><span className="brand-icon"><Sprout size={18}/></span><span>Briar</span></span>;
 
   if(!state||!s||!h)return <div className="welcome" hidden={!active}><div className="welcome-card">{brand}<h1>{root.split('/').pop()}</h1>{loadError||state?.initialError?<><div className="inline-error" role="alert">{loadError||state?.initialError}</div><div className="connect-actions"><button className="btn ghost" onClick={()=>{setLoadError('');void refresh();}}><RefreshCw size={14}/>Tentar de novo</button><button className="btn danger" onClick={onClose}><X size={14}/>Fechar aba</button></div></>:<p className="muted">Lendo o repositório…</p>}<p className="welcome-note"><FolderGit2 size={13}/>{root}</p></div></div>;
@@ -350,7 +380,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
     <div className="diff-head">
       <button className="btn ghost" onClick={()=>setChoice(null)}><ArrowLeft size={14}/>Grafo</button>
       <FileCode2 size={14}/><span className="diff-path" title={choice.path}>{choice.path}</span>
-      <span className={`diff-kind ${choice.conflicted?'conflict':''}`}>{choice.conflicted?'Em conflito':choice.sha?`Commit ${short(choice.sha)}`:choice.staged?'Preparado':'Não preparado'}</span>
+      <span className={`diff-kind ${choice.conflicted?'conflict':''}`}>{choice.conflicted?'Em conflito':choice.stash?'Stash':choice.sha?`Commit ${short(choice.sha)}`:choice.staged?'Preparado':'Não preparado'}</span>
       {choice.conflicted&&<span className="diff-actions">
         <button className="btn ours" disabled={!!busy} onClick={()=>resolve(choice.path,'ours')}>Usar a minha ({s.branch||'HEAD'})</button>
         <button className="btn theirs" disabled={!!busy} onClick={()=>resolve(choice.path,'theirs')}>Usar a recebida</button>
@@ -374,7 +404,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
   </div>;};
 
   const wipPanel=<div className="panel-body">
-    <div className="panel-title"><Pencil size={14}/><span>{s.files.length} {s.files.length===1?'alteração':'alterações'} em <b>{s.branch||'HEAD destacado'}</b></span></div>
+    <div className="panel-title"><Pencil size={14}/><span>{s.files.length} {s.files.length===1?'alteração':'alterações'} em <b>{s.branch||'HEAD destacado'}</b></span><span className="grow"/>{s.files.length>0&&<button className="btn ghost xs" disabled={!!busy||!!s.merging||conflicts.length>0||!s.head} onClick={openStash} title="Guardar as alterações num stash"><Archive size={12}/>Stash</button>}</div>
     {s.merging&&<div className="merge-box"><div className="merge-box-title"><GitMerge size={14}/>Merge em andamento</div><p>{subject(s.merging.message)}</p><p className="muted">{conflicts.length?`${conflicts.length} ${conflicts.length===1?'arquivo em conflito':'arquivos em conflito'}. Resolva todos para concluir.`:'Todos os conflitos resolvidos. Escreva a mensagem e conclua o merge.'}</p><button className="btn danger" disabled={!!busy} onClick={()=>action('merge-abort',{},'Merge abortado. Branch restaurada.')}><X size={13}/>Abortar merge</button></div>}
     {conflicts.length>0&&<div className="file-group conflict-group"><div className="group-head"><TriangleAlert size={13}/>Conflitos<span className="count">{conflicts.length}</span></div>{conflicts.map(f=>{const [dir,name]=splitPath(f.path);return <div key={'c'+f.path} className={`file-row ${choice?.conflicted&&choice.path===f.path?'active':''}`}><span className="st st-conflict">!</span><button className="file-name" title={f.path} onClick={()=>setChoice({path:f.path,staged:false,conflicted:true})}><span className="fn">{name}</span><span className="fd">{dir}</span></button><button className="file-act" onClick={()=>setChoice({path:f.path,staged:false,conflicted:true})}>Resolver</button></div>;})}</div>}
     <div className="file-group"><div className="group-head">Unstaged<span className="count">{unstaged.length}</span>{unstaged.length>0&&<><button className="group-act discard" title="Descartar todas as alterações não preparadas" disabled={!!busy||!!s.merging} onClick={()=>openDiscard(unstaged.map(f=>f.path))}><Trash2 size={11}/>Descartar</button><button className="group-act stage" disabled={!!busy} onClick={()=>action('stage',{paths:unstaged.map(f=>f.path)},'Todos os arquivos preparados.')}>Stage all</button></>}</div>{unstaged.length?unstaged.map(f=>fileRow(f,'unstaged')):<p className="files-empty">Nada pendente.</p>}</div>
@@ -396,6 +426,21 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
     :<div className="info-grid"><span>Hash</span><code>{shownCommit.sha}</code><span>Autor</span><span>{shownCommit.author}</span><span>Data</span><span>{fmt(shownCommit.date,true)}</span><span>Pais</span><span>{shownCommit.parents.map(short).join(', ')||'—'}</span></div>}
   </div>;
 
+  const stashBlocked=!!s.merging||conflicts.length>0;
+  const stashPanel=stashShown&&<div className="panel-body">
+    <div className="commit-head"><div className="commit-sha"><span>stash:</span><button title="Copiar hash" onClick={()=>copy(stashShown.sha)}><code>{stashLabel(stashShown)}</code><Copy size={11}/></button></div><h2>{stashShown.message}</h2>
+      <div className="stash-meta"><Archive size={12}/>{stashShown.branch?<>feito em <b>{stashShown.branch}</b> · </>:null}{fmt(stashShown.date,true)}</div>
+      {stashBlocked&&<p className="muted small">{s.merging?'Há um merge em andamento: conclua ou aborte antes de aplicar.':'Resolva os conflitos atuais antes de aplicar.'}</p>}
+      <div className="stash-actions">
+        <button className="btn primary sm" disabled={!!busy||stashBlocked} onClick={()=>applyStash(stashShown,true)} title="Traz as alterações de volta para o WIP e apaga o stash"><ArchiveRestore size={13}/>{busy==='stash-apply'?'Aplicando…':'Pop'}</button>
+        <button className="btn ghost sm" disabled={!!busy||stashBlocked} onClick={()=>applyStash(stashShown,false)} title="Traz as alterações de volta e mantém o stash guardado"><Download size={13}/>Aplicar</button>
+        <button className="btn ghost sm" disabled={!!busy} onClick={()=>openStashBranch(stashShown)} title="Cria uma branch no commit onde o stash foi feito e aplica o stash nela"><GitBranchPlus size={13}/>Branch</button>
+        <button className="btn danger sm" disabled={!!busy} onClick={()=>dropStash(stashShown)} title="Apaga o stash (dá para desfazer logo depois)"><Trash2 size={13}/>Apagar</button>
+      </div>
+    </div>
+    <div className="file-group"><div className="group-head">Arquivos{stashFiles&&<span className="count">{stashFiles.length}</span>}</div>{!stashFiles?<p className="files-empty">Carregando…</p>:!stashFiles.length?<p className="files-empty">Nenhum arquivo.</p>:stashFiles.map(f=>{const [dir,name]=splitPath(f.path);return <div key={f.path} className={`file-row ${choice?.stash&&choice.sha===stashShown.sha&&choice.path===f.path?'active':''}`}><span className={`st ${f.untracked?'st-add':'st-mod'}`} title={f.untracked?'Arquivo novo':'Modificado'}>{f.untracked?'A':'M'}</span><button className="file-name" title={f.path} onClick={()=>setChoice({path:f.path,staged:false,sha:stashShown.sha,stash:true})}><span className="fn">{name}</span><span className="fd">{dir}</span></button><span className="numstat">{f.binary?'bin':<><b className="plus">+{f.additions}</b><b className="minus">−{f.deletions}</b></>}</span></div>;})}</div>
+  </div>;
+
   const nonCurrentBranches=allBranches.filter(b=>b.name!==(into||s.branch));
   const pushCmd=s.upstream&&s.remote&&s.remote!=='.'?`git push ${s.remote} ${s.branch}`:`git push -u ${s.remotes.includes('origin')?'origin':s.remotes[0]||'origin'} ${s.branch}`;
 
@@ -412,6 +457,9 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
         <span className="tool-sep"/>
         {toolButton(<GitBranchPlus size={18}/>,'Branch',()=>openBranch(false),{disabled:!s.head})}
         {toolButton(<GitMerge size={18}/>,'Merge',()=>openMerge(),{disabled:!s.branch||!!s.merging})}
+        <span className="tool-sep"/>
+        {toolButton(<Archive size={18}/>,'Stash',openStash,{disabled:!s.files.length||!!s.merging||conflicts.length>0||!s.head,title:s.files.length?'Guardar as alterações do WIP num stash':'Nada para guardar'})}
+        {toolButton(<ArchiveRestore size={18}/>,'Pop',()=>{if(s.stashes[0])void applyStash(s.stashes[0],true);},{badge:s.stashes.length,disabled:!s.stashes.length||!!s.merging||conflicts.length>0,title:s.stashes[0]?`Aplicar e remover o stash mais recente: ${s.stashes[0].message}`:'Nenhum stash guardado'})}
       </div>
       <div className="toolbar-right">
         {updatePill}
@@ -428,6 +476,10 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
           {sideSection('local',<><Laptop size={13}/>LOCAL</>,localBranches.length,localBranches.filter(b=>b.name.toLocaleLowerCase().includes(sf)).map(branchItem))}
           {sideSection('remote',<><Cloud size={13}/>REMOTE</>,remoteBranches.length,remotesGrouped.map(g=><div key={g.remote} className="remote-group"><button className="remote-name" onClick={()=>setCollapsed(c=>({...c,['r:'+g.remote]:!c['r:'+g.remote]}))}>{collapsed['r:'+g.remote]?<ChevronRight size={12}/>:<ChevronDown size={12}/>}<Cloud size={12}/>{g.remote}</button>{!collapsed['r:'+g.remote]&&g.list.map(branchItem)}</div>))}
           {sideSection('tags',<><Tag size={13}/>TAGS</>,s.tags.length,s.tags.filter(t=>t.name.toLocaleLowerCase().includes(sf)).map(t=><button key={t.name} className="side-tag" title={`${t.name}\nBotão direito: push ou apagar`} onContextMenu={e=>tagMenu(e,t.name,t.sha)} onClick={()=>{if(layout.cols.has(t.sha))select(t.sha,true);}}><Tag size={11}/>{t.name}</button>))}
+          {sideSection('stashes',<><Archive size={13}/>STASHES</>,s.stashes.length,s.stashes.length?s.stashes.filter(x=>x.message.toLocaleLowerCase().includes(sf)||(x.branch||'').toLocaleLowerCase().includes(sf)).map(x=><div key={x.sha} className={`side-stash ${stashSel===x.sha?'on':''}`} onContextMenu={e=>stashMenu(e,x)}>
+            <button className="side-stash-main" title={`${stashLabel(x)}: ${x.message}${x.branch?`\nfeito em ${x.branch}`:''}\n${fmt(x.date,true)}\nClique: opções · Botão direito: menu`} onClick={e=>{showStash(x);stashMenu(e,x);}}><Archive size={11}/><span className="side-stash-text"><span className="side-stash-msg">{x.message}</span><span className="side-stash-sub">{x.branch||'?'} · {fmt(x.date)}</span></span></button>
+            <span className="side-actions"><button title="Pop: aplicar e remover" disabled={!!busy||stashBlocked} onClick={()=>applyStash(x,true)}><ArchiveRestore size={12}/></button><button title="Apagar" disabled={!!busy} onClick={()=>dropStash(x)}><Trash2 size={12}/></button></span>
+          </div>):<p className="side-empty">Nenhum stash. Use <b>Stash</b> no topo para guardar o WIP.</p>)}
         </div>
         <div className="side-foot"><span className={`work-state ${s.files.length?'dirty':'clean'}`}><span/>{s.files.length?`${s.files.length} ${s.files.length===1?'alteração':'alterações'} não commitadas`:'Área de trabalho limpa'}</span></div>
       </aside>
@@ -490,7 +542,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
         </>}
       </main>
 
-      <aside className="panel">{showWip?wipPanel:commitPanel||<div className="panel-empty"><GitCommitHorizontal size={26}/><p>Selecione um commit.</p></div>}</aside>
+      <aside className="panel">{stashPanel||(showWip?wipPanel:commitPanel)||<div className="panel-empty"><GitCommitHorizontal size={26}/><p>Selecione um commit.</p></div>}</aside>
     </div>
 
     <footer className="statusbar"><span title={s.root}><FolderGit2 size={12}/>{s.root}</span><span>{s.upstream?<>↑{s.ahead} ↓{s.behind} · {s.upstream}</>:'sem upstream'}</span><span>{autoFetching?'buscando novidades no remoto…':s.lastFetch?`último fetch ${fmt(s.lastFetch,true)}`:'fetch ainda não executado'}</span>{s.autoFetchError&&<span className="warn" title={`O fetch automático falhou e tenta de novo em alguns minutos:\n${s.autoFetchError}`}><TriangleAlert size={11}/>fetch automático falhou</span>}<span className="grow"/><span>{updated?`atualizado ${new Date(updated).toLocaleTimeString('pt-BR')}`:''}</span>{versionLabel}<span><LockKeyhole size={11}/>local</span></footer>
@@ -538,7 +590,16 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
         <div className="modal-actions"><button className="btn ghost" data-autofocus onClick={()=>setDialog(null)} disabled={!!busy}>Cancelar</button><button className="btn danger-solid" disabled={!!busy} onClick={runDeleteTag}><Trash2 size={13}/>{busy==='tag-delete'?'Apagando…':'Apagar'}</button></div></>;})()}
       {dialog==='discard'&&<><h2 id="dialog-title" className="danger-title"><Trash2 size={17}/>Descartar {discardPaths.length===1?'alterações do arquivo':`alterações de ${discardPaths.length} arquivos`}</h2><p className="modal-text">{discardPaths.length===1?'O arquivo volta':'Os arquivos voltam'} a ficar como no último commit. Arquivos novos são removidos e arquivos apagados voltam. Vale tanto para o que está em Staged quanto para o que está em Unstaged.</p><ul className="conflict-list discard-list">{discardPaths.slice(0,12).map(p=>{const f=s.files.find(x=>x.path===p);const st=f?statusLetter(f,!f.unstaged):null;return <li key={p}>{st&&<span className={`st ${st.cls}`} title={st.title}>{st.letter}</span>}<code>{p}</code></li>;})}{discardPaths.length>12&&<li className="muted">e mais {discardPaths.length-12}…</li>}</ul><p className="muted small"><Undo2 size={12}/> Dá para desfazer logo depois pelo aviso que aparece embaixo. As alterações também ficam guardadas no stash do Git como "Briar: descartado…".</p><div className="modal-actions"><button className="btn ghost" data-autofocus onClick={()=>setDialog(null)} disabled={!!busy}>Cancelar</button><button className="btn danger-solid" disabled={!!busy} onClick={runDiscard}><Trash2 size={13}/>{busy==='discard'?'Descartando…':'Descartar'}</button></div></>}
       {dialog==='operations'&&<><h2 id="dialog-title"><Terminal size={17}/>Operações Git desta sessão</h2><div className="audit">{s.audit.length?s.audit.map((a,i)=><div className="audit-entry" key={a.date+i}><span className={a.success?'plus':'minus'}>{a.success?'ok':'falhou'} · {new Date(a.date).toLocaleTimeString('pt-BR')}</span><code>{a.command}</code>{a.output&&<pre>{a.output}</pre>}</div>):<p className="muted">Nenhuma operação executada ainda.</p>}</div></>}
-      {dialog==='help'&&<><h2 id="dialog-title"><CircleHelp size={17}/>Como usar</h2><div className="help"><p><b>Grafo:</b> cada coluna é uma linha de desenvolvimento. A branch atual fica na primeira coluna, com traço mais grosso e rótulo destacado com <Check size={11}/>. <Laptop size={11}/> = local, <Cloud size={11}/> = remota.</p><p><b>// WIP:</b> linha no topo com seus arquivos ainda não commitados. Clique nela para fazer stage e commit no painel à direita.</p><p><b>Branches:</b> clique para localizar no grafo; duplo clique faz checkout (se a branch local já existe, o Briar troca para ela e a atualiza com o remoto). <b>Arraste uma branch sobre outra</b> (na lateral, no grafo ou no seletor de branch do topo) para abrir o merge.</p><p><b>Merge:</b> mostra antes quais arquivos terão conflito. Se houver, cada arquivo aparece em "Conflitos" e o aviso vermelho fica no topo até alguém resolver: escolha trecho a trecho a sua versão, a recebida ou as duas, ou edite no editor e marque como resolvido. Depois clique em <b>Concluir merge</b> — ou <b>Abortar</b> para voltar ao estado anterior.</p><p><b>Botão direito</b> numa branch, tag ou commit abre o menu: criar tag (já sugere o próximo número), push de tag e apagar branch ou tag, local ou no remoto.</p><p><b>Pull / Push / Fetch:</b> usam a autenticação Git já configurada. Nunca há force push.</p><p><kbd>/</kbd> busca · <kbd>↑</kbd><kbd>↓</kbd> navegam · <kbd>esc</kbd> fecha.</p></div></>}
+      {dialog==='stash'&&<form onSubmit={runStash}><h2 id="dialog-title"><Archive size={17}/>Guardar no stash</h2><p className="modal-text">As alterações saem do WIP e ficam guardadas. Depois é só dar <b>Pop</b> (ou clicar no stash na lateral) para trazê-las de volta, nesta ou em outra branch.</p>
+        <label className="field"><span>Mensagem (opcional)</span><input data-autofocus value={stashMsg} maxLength={300} onChange={e=>setStashMsg(e.target.value)} placeholder={`WIP em ${s.branch||'HEAD'}`} autoComplete="off"/></label>
+        <label className="check"><input type="checkbox" checked={stashStaged} disabled={!staged.length} onChange={e=>setStashStaged(e.target.checked)}/>Só o que está em Staged ({staged.length})</label>
+        <label className="check"><input type="checkbox" checked={stashUntracked&&!stashStaged} disabled={stashStaged} onChange={e=>setStashUntracked(e.target.checked)}/>Incluir arquivos novos (não rastreados)</label>
+        <div className="modal-actions"><button type="button" className="btn ghost" onClick={()=>setDialog(null)} disabled={!!busy}>Cancelar</button><button type="submit" className="btn primary" disabled={!!busy}><Archive size={13}/>{busy==='stash-push'?'Guardando…':'Guardar'}</button></div></form>}
+      {dialog==='stash-branch'&&stashTarget&&<form onSubmit={runStashBranch}><h2 id="dialog-title"><GitBranchPlus size={17}/>Branch a partir do stash</h2><p className="modal-text">Cria a branch no commit em que <b>{stashTarget.message}</b> foi feito, troca para ela e aplica o stash ali, sem conflito. O stash é removido em seguida.</p>
+        <label className="field"><span>Nome</span><input data-autofocus value={branchName} onChange={e=>setBranchName(e.target.value.replace(/\s/g,'-'))} placeholder="feature/do-stash" spellCheck={false} autoComplete="off"/></label>
+        {s.files.some(f=>!f.untracked)&&<div className="inline-error">Há alterações no WIP. Faça commit ou stash delas antes.</div>}
+        <div className="modal-actions"><button type="button" className="btn ghost" onClick={()=>setDialog(null)} disabled={!!busy}>Cancelar</button><button type="submit" className="btn primary" disabled={!!busy||!branchName.trim()||s.files.some(f=>!f.untracked)}>{busy==='stash-branch'?'Criando…':'Criar branch'}</button></div></form>}
+      {dialog==='help'&&<><h2 id="dialog-title"><CircleHelp size={17}/>Como usar</h2><div className="help"><p><b>Grafo:</b> cada coluna é uma linha de desenvolvimento. A branch atual fica na primeira coluna, com traço mais grosso e rótulo destacado com <Check size={11}/>. <Laptop size={11}/> = local, <Cloud size={11}/> = remota.</p><p><b>// WIP:</b> linha no topo com seus arquivos ainda não commitados. Clique nela para fazer stage e commit no painel à direita.</p><p><b>Branches:</b> clique para localizar no grafo; duplo clique faz checkout (se a branch local já existe, o Briar troca para ela e a atualiza com o remoto). <b>Arraste uma branch sobre outra</b> (na lateral, no grafo ou no seletor de branch do topo) para abrir o merge.</p><p><b>Merge:</b> mostra antes quais arquivos terão conflito. Se houver, cada arquivo aparece em "Conflitos" e o aviso vermelho fica no topo até alguém resolver: escolha trecho a trecho a sua versão, a recebida ou as duas, ou edite no editor e marque como resolvido. Depois clique em <b>Concluir merge</b> — ou <b>Abortar</b> para voltar ao estado anterior.</p><p><b>Botão direito</b> numa branch, tag ou commit abre o menu: criar tag (já sugere o próximo número), push de tag e apagar branch ou tag, local ou no remoto.</p><p><b>Stash:</b> <b>Stash</b> no topo (ou no painel do WIP) guarda as alterações e limpa o WIP. Os stashes ficam na lateral: clique num deles para ver os arquivos e as opções (<b>Pop</b>, <b>Aplicar</b>, <b>Branch</b>, <b>Apagar</b>). <b>Pop</b> no topo traz de volta o mais recente. Se der conflito, o stash continua guardado.</p><p><b>Pull / Push / Fetch:</b> usam a autenticação Git já configurada. Nunca há force push.</p><p><kbd>/</kbd> busca · <kbd>↑</kbd><kbd>↓</kbd> navegam · <kbd>esc</kbd> fecha.</p></div></>}
       {error&&<div className="inline-error" role="alert">{error}<button aria-label="Dispensar" onClick={()=>setError('')}><X size={13}/></button></div>}
     </div></div>}
     {error&&!dialog&&<div className="error-toast" role="alert"><CircleAlert size={15}/><span>{error}</span><button aria-label="Dispensar erro" onClick={()=>setError('')}><X size={14}/></button></div>}
@@ -547,7 +608,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
       {menu.items.map((it,i)=>it==='sep'?<div key={i} className="ctx-sep"/>:<button key={i} role="menuitem" className={`ctx-item ${it.danger?'danger':''}`} disabled={it.disabled} title={it.title} onClick={()=>{setMenu(null);it.run();}}>{it.icon}<span>{it.label}</span></button>)}
     </div></div>}
     {toast&&!undo&&<div className="toast" role="status"><Check size={15}/>{toast}</div>}
-    {undo&&<div className="toast undo-toast" role="status"><Trash2 size={15}/>{undo.text}<button className="btn ghost sm" disabled={!!busy} onClick={undoDiscard}><Undo2 size={13}/>Desfazer</button><button aria-label="Dispensar" onClick={()=>setUndo(null)}><X size={13}/></button></div>}
+    {undo&&<div className="toast undo-toast" role="status">{undo.kind==='drop'?<Archive size={15}/>:<Trash2 size={15}/>}{undo.text}<button className="btn ghost sm" disabled={!!busy} onClick={undoDiscard}><Undo2 size={13}/>Desfazer</button><button aria-label="Dispensar" onClick={()=>setUndo(null)}><X size={13}/></button></div>}
   </div>;
 }
 
