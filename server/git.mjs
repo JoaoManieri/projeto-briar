@@ -44,6 +44,36 @@ export class GitRepository {
  async verifyFiles(paths,staged=false){if(!Array.isArray(paths)||!paths.length||paths.length>2000||paths.some(p=>typeof p!=='string'||!p||p.includes('\0')))throw new GitError('Selecione arquivos válidos.');const files=await this.files();for(const p of paths){if(!files.some(f=>f.path===p&&(staged?f.staged:f.unstaged)))throw new GitError('O estado dos arquivos mudou. Atualize e tente novamente.',409);}return files;}
  async stage(paths){return this.mutate(async()=>{const files=await this.verifyFiles(paths);if(files.some(f=>paths.includes(f.path)&&f.conflicted))throw new GitError('Resolva o conflito no editor antes de preparar esse arquivo.');const add=[...new Set(paths.flatMap(p=>{const f=files.find(x=>x.path===p);return f.oldPath?[p,f.oldPath]:[p];}))];await this.git(['add','--',...add],{audit:true});});}
  async unstage(paths){return this.mutate(async()=>{const files=await this.verifyFiles(paths,true);const targets=[...new Set(paths.flatMap(p=>{const f=files.find(x=>x.path===p);return f.oldPath?[p,f.oldPath]:[p];}))];await this.git(await this.head()?['restore','--staged','--',...targets]:['rm','--cached','--',...targets],{audit:true});});}
+ // Descartar = guardar as alterações dos arquivos num stash ("Briar: descartado …") e devolvê-los ao último commit.
+ // Nada se perde de vez: dá para desfazer (undoDiscard) ou recuperar depois com git stash apply.
+ async discard(paths){return this.mutate(async()=>{
+  if(!Array.isArray(paths)||!paths.length||paths.length>2000||paths.some(p=>typeof p!=='string'||!p||p.includes('\0')))throw new GitError('Selecione arquivos válidos.');
+  const files=await this.files();
+  const chosen=paths.map(p=>files.find(f=>f.path===p));
+  if(chosen.some(f=>!f))throw new GitError('O estado dos arquivos mudou. Atualize e tente novamente.',409);
+  if(await this.mergeState())throw new GitError('Conclua ou aborte o merge em andamento antes de descartar alterações.',409);
+  if(chosen.some(f=>f.conflicted))throw new GitError('Arquivos em conflito se resolvem no editor de conflitos, não com descarte.');
+  if(!await this.head())throw new GitError('Ainda não há commits neste repositório: não existe versão anterior para voltar.');
+  const targets=[...new Set(chosen.flatMap(f=>f.oldPath?[f.path,f.oldPath]:[f.path]))];
+  const before=await this.stashTop();
+  const names=chosen.map(f=>f.path);
+  const label=`Briar: descartado ${new Date().toLocaleString('pt-BR')} · ${names.slice(0,3).join(', ')}${names.length>3?` e mais ${names.length-3}`:''}`;
+  await this.git(['stash','push','--include-untracked','-m',label,'--',...targets],{audit:true});
+  const stash=await this.stashTop();
+  if(!stash||stash===before)throw new GitError('O Git não encontrou alterações para descartar nesses arquivos.',409);
+  return {stash,count:names.length,message:`${names.length===1?names[0]+' descartado':names.length+' arquivos descartados'}. Dá para desfazer.`};
+ });}
+ async stashTop(){return (await this.git(['rev-parse','--verify','--quiet','refs/stash'],{allow:[0,1]})).trim()||null;}
+ async undoDiscard(stash){return this.mutate(async()=>{
+  if(typeof stash!=='string'||!/^[a-f0-9]{40,64}$/.test(stash))throw new GitError('Descarte inválido.');
+  const list=(await this.git(['stash','list','--format=%H'])).split('\n').map(l=>l.trim());
+  const n=list.indexOf(stash);
+  if(n<0)throw new GitError('Esse descarte não está mais no stash.',409);
+  try{await this.git(['stash','apply','--index',`stash@{${n}}`],{audit:true});}
+  catch(e){throw new GitError('Não deu para restaurar automaticamente: os arquivos mudaram depois do descarte. As alterações continuam guardadas no stash ("Briar: descartado …"); use git stash apply quando quiser.\n\n'+e.message,409);}
+  await this.git(['stash','drop',`stash@{${n}}`],{audit:true});
+  return {message:'Descarte desfeito: as alterações voltaram.'};
+ });}
  async commit({message,expectedHead,expectedIndex}){return this.mutate(async()=>{
   if(typeof message!=='string'||!message.trim()||message.length>10000||message.includes('\0'))throw new GitError('Escreva uma mensagem de commit (até 10.000 caracteres).');
   const s=await this.status();if(s.head!==expectedHead||s.indexFingerprint!==expectedIndex)throw new GitError('O HEAD ou os arquivos preparados mudaram. Revise o commit novamente.',409);
