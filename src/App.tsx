@@ -8,7 +8,7 @@ import {ancestors,layoutGraph,palette,type History,type Commit} from './history'
 
 type FileState={path:string;oldPath?:string;index:string;worktree:string;staged:boolean;unstaged:boolean;untracked:boolean;conflicted:boolean};
 type BranchRef={name:string;sha:string;remote:boolean};
-type Status={root:string;lastTag:string|null;branch:string|null;head:string|null;files:FileState[];merging:{message:string;source?:string|null}|null;branches:BranchRef[];tags:{name:string;sha:string}[];upstream:string|null;ahead:number;behind:number;remote:string|null;remotes:string[];lastFetch:string|null;indexFingerprint:string;conflicted:boolean;audit:{command:string;output:string;date:string;success:boolean}[]};
+type Status={root:string;lastTag:string|null;branch:string|null;head:string|null;files:FileState[];merging:{message:string;source?:string|null}|null;branches:BranchRef[];tags:{name:string;sha:string}[];upstream:string|null;ahead:number;behind:number;remote:string|null;remotes:string[];lastFetch:string|null;autoFetchError:string|null;indexFingerprint:string;conflicted:boolean;audit:{command:string;output:string;date:string;success:boolean}[]};
 type State={status:Status|null;history:(History&{truncated?:boolean})|null;initialError:string};
 type Dialog='operations'|'help'|'branch'|'merge'|'push'|'pull'|'discard'|'tag'|'delete-branch'|'delete-tag'|null;
 type MenuItem={label:string;icon?:ReactNode;danger?:boolean;disabled?:boolean;title?:string;run:()=>void}|'sep';
@@ -121,6 +121,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
   const [author,setAuthor]=useState('all');
   const [dialog,setDialog]=useState<Dialog>(null);
   const [busy,setBusy]=useState('');
+  const [autoFetching,setAutoFetching]=useState(false);
   const [error,setError]=useState('');
   const [toast,setToast]=useState('');
   const [zoom,setZoom]=useState(1);
@@ -145,7 +146,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
   const [dropOn,setDropOn]=useState<string|null>(null);
   const [rawConflict,setRawConflict]=useState(false);
   const autoOpened=useRef(false);
-  const search=useRef<HTMLInputElement>(null),scroll=useRef<HTMLDivElement>(null),modal=useRef<HTMLDivElement>(null),busyRef=useRef(false),seq=useRef(0);
+  const search=useRef<HTMLInputElement>(null),scroll=useRef<HTMLDivElement>(null),modal=useRef<HTMLDivElement>(null),busyRef=useRef(false),seq=useRef(0),autoRef=useRef(false),statusRef=useRef<Status|null>(null);
 
   const h=state?.history,s=state?.status;
   const hasWip=!!s&&(s.files.length>0||!!s.merging);
@@ -194,9 +195,25 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
   const conflicts=s?.files.filter(f=>f.conflicted)||[];
 
   async function refresh(showError=true){const id=++seq.current;try{const next=await call('state');if(id===seq.current){setState(next);setLoadError('');setUpdated(new Date().toISOString());}}catch(e){if(!state)setLoadError((e as Error).message);else if(showError)setError((e as Error).message);}}
+  statusRef.current=s||null;
+  // Fetch automático e silencioso da aba visível: ao abrir/trocar de aba e quando a janela volta ao
+  // foco (se o último fetch tem mais de 1 min) e, com a janela aberta, a cada 3 min. O servidor
+  // segura o ritmo e, se falhar (sem rede/credencial), espera 5 min antes de tentar de novo.
+  async function autoFetch(minAge:number){
+    const st=statusRef.current;
+    if(autoRef.current||busyRef.current||!activeRef.current||document.hidden||(st&&!st.remotes.length))return;
+    if(st?.lastFetch&&Date.now()-Date.parse(st.lastFetch)<minAge)return;
+    autoRef.current=true;const spin=setTimeout(()=>setAutoFetching(true),300);
+    try{const r=await call('auto-fetch',{minAge});const o=r?.output||{};if((o.fetched||o.error)&&!busyRef.current)await refresh(false);}
+    catch{}finally{clearTimeout(spin);autoRef.current=false;setAutoFetching(false);}
+  }
   // Só a aba visível consulta o Git a cada 15 s; as outras se atualizam ao voltar a ficar visíveis.
   useEffect(()=>{if(!active)void refresh(false);},[]);
-  useEffect(()=>{if(!active)return;void refresh(false);const focus=()=>{if(!busyRef.current)void refresh(false);};window.addEventListener('focus',focus);const interval=setInterval(focus,15000);return()=>{window.removeEventListener('focus',focus);clearInterval(interval);};},[active]);
+  useEffect(()=>{if(!active)return;void refresh(false).then(()=>autoFetch(60000));
+    const focus=()=>{if(document.hidden||busyRef.current)return;void refresh(false);void autoFetch(60000);};
+    const tick=()=>{if(document.hidden||busyRef.current)return;void refresh(false);void autoFetch(180000);};
+    window.addEventListener('focus',focus);document.addEventListener('visibilitychange',focus);const interval=setInterval(tick,15000);
+    return()=>{window.removeEventListener('focus',focus);document.removeEventListener('visibilitychange',focus);clearInterval(interval);};},[active]);
   useEffect(()=>{onMeta(root,{busy:!!busy,changes:state?.status?.files.length||0,branch:state?.status?.branch||null,conflict:!!state?.status?.merging});},[busy,state]);
   useEffect(()=>{if(undo){const t=setTimeout(()=>setUndo(null),15000);return()=>clearTimeout(t);}},[undo]);
   useEffect(()=>{if(toast){const t=setTimeout(()=>setToast(''),5000);return()=>clearTimeout(t);}},[toast]);
@@ -391,7 +408,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
       <div className="tools">
         {toolButton(<ArrowDownToLine size={18}/>,'Pull',openPull,{badge:s.behind,disabled:!s.remotes.length,title:s.upstream?`Trazer commits de ${s.upstream}`:'A branch não acompanha um remoto'})}
         {toolButton(<ArrowUpToLine size={18}/>,'Push',()=>setDialog('push'),{badge:s.ahead,disabled:!s.remotes.length||!s.branch,title:'Enviar commits ao remoto'})}
-        {toolButton(<RefreshCw size={18} className={busy==='fetch'?'spinning':''}/>,'Fetch',()=>action('fetch',{},'Referências remotas atualizadas.'),{disabled:!s.remotes.length,title:'git fetch --prune'})}
+        {toolButton(<RefreshCw size={18} className={busy==='fetch'||(autoFetching&&!busy)?'spinning':''}/>,'Fetch',()=>action('fetch',{},'Referências remotas atualizadas.'),{disabled:!s.remotes.length,title:'git fetch --prune'})}
         <span className="tool-sep"/>
         {toolButton(<GitBranchPlus size={18}/>,'Branch',()=>openBranch(false),{disabled:!s.head})}
         {toolButton(<GitMerge size={18}/>,'Merge',()=>openMerge(),{disabled:!s.branch||!!s.merging})}
@@ -476,7 +493,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
       <aside className="panel">{showWip?wipPanel:commitPanel||<div className="panel-empty"><GitCommitHorizontal size={26}/><p>Selecione um commit.</p></div>}</aside>
     </div>
 
-    <footer className="statusbar"><span title={s.root}><FolderGit2 size={12}/>{s.root}</span><span>{s.upstream?<>↑{s.ahead} ↓{s.behind} · {s.upstream}</>:'sem upstream'}</span><span>{s.lastFetch?`último fetch ${fmt(s.lastFetch,true)}`:'fetch ainda não executado'}</span><span className="grow"/><span>{updated?`atualizado ${new Date(updated).toLocaleTimeString('pt-BR')}`:''}</span>{versionLabel}<span><LockKeyhole size={11}/>local</span></footer>
+    <footer className="statusbar"><span title={s.root}><FolderGit2 size={12}/>{s.root}</span><span>{s.upstream?<>↑{s.ahead} ↓{s.behind} · {s.upstream}</>:'sem upstream'}</span><span>{autoFetching?'buscando novidades no remoto…':s.lastFetch?`último fetch ${fmt(s.lastFetch,true)}`:'fetch ainda não executado'}</span>{s.autoFetchError&&<span className="warn" title={`O fetch automático falhou e tenta de novo em alguns minutos:\n${s.autoFetchError}`}><TriangleAlert size={11}/>fetch automático falhou</span>}<span className="grow"/><span>{updated?`atualizado ${new Date(updated).toLocaleTimeString('pt-BR')}`:''}</span>{versionLabel}<span><LockKeyhole size={11}/>local</span></footer>
 
     {dialog&&<div className="backdrop" onMouseDown={e=>{if(e.target===e.currentTarget&&!busy)setDialog(null);}}><div className="modal" ref={modal} role="dialog" aria-modal="true" aria-labelledby="dialog-title">
       <button className="modal-close icon-btn" aria-label="Fechar" disabled={!!busy} onClick={()=>setDialog(null)}><X size={16}/></button>

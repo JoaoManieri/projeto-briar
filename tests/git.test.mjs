@@ -63,3 +63,18 @@ test('apagar branch: local, remota, as duas; protege a atual e trabalho que só 
  await repo.deleteBranch({branch:'origin/feature',scope:'remote',force:true});assert.doesNotMatch(await git(origin,'branch'),/feature/);assert.equal(await git(root,'branch','-r','--list','origin/feature'),'');
  await git(root,'switch','-c','both');await git(root,'push','-u','origin','both');await git(root,'switch','main');
  await repo.deleteBranch({branch:'both',scope:'both'});assert.equal(await git(root,'branch','-a','--list','*both*'),'');assert.doesNotMatch(await git(origin,'branch'),/both/);});
+test('fetch automático: silencioso, respeita o intervalo mínimo, detecta novidades e espera após falha',async()=>{
+ const {root,parent,repo}=await fixture();
+ assert.deepEqual(await repo.autoFetch(),{skipped:'no-remote'});
+ const origin=path.join(parent,'remote.git');await mkdir(origin);await git(origin,'init','--bare','-b','main');await git(root,'remote','add','origin',origin);await git(root,'push','-u','origin','main');
+ const friend=path.join(parent,'friend');await git(parent,'clone',origin,friend);await git(friend,'config','user.name','F');await git(friend,'config','user.email','f@example.invalid');
+ await writeFile(path.join(friend,'f.txt'),'f\n');await git(friend,'add','.');await git(friend,'commit','-m','f');await git(friend,'push');
+ let r=await repo.autoFetch({minAge:0});assert.deepEqual(r,{fetched:true,changed:true});
+ const s=await repo.status();assert.equal(s.behind,1);assert.ok(s.lastFetch);assert.equal(s.autoFetchError,null);assert.equal(s.audit.length,0);
+ assert.deepEqual(await repo.autoFetch({minAge:60000}),{skipped:'recent'});
+ assert.deepEqual(await repo.autoFetch({minAge:0}),{fetched:true,changed:false});
+ await git(root,'remote','set-url','origin',path.join(parent,'nao-existe.git'));
+ r=await repo.autoFetch({minAge:0});assert.ok(r.error);assert.ok((await repo.status()).autoFetchError);
+ assert.deepEqual(await repo.autoFetch({minAge:0}),{skipped:'backoff'});
+ await git(root,'remote','set-url','origin',origin);await repo.fetch();assert.equal((await repo.status()).autoFetchError,null);
+});
