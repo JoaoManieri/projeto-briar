@@ -151,6 +151,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
   const [into,setInto]=useState('');
   const [drag,setDrag]=useState<string|null>(null);
   const [dropOn,setDropOn]=useState<string|null>(null);
+  const [dragRow,setDragRow]=useState<string|null>(null);
   const [rawConflict,setRawConflict]=useState(false);
   const autoOpened=useRef(false);
   const search=useRef<HTMLInputElement>(null),scroll=useRef<HTMLDivElement>(null),modal=useRef<HTMLDivElement>(null),busyRef=useRef(false),seq=useRef(0),autoRef=useRef(false),statusRef=useRef<Status|null>(null);
@@ -259,11 +260,12 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
   async function openSwitch(name:string){if(!name||name===s?.branch)return;if(await action('switch',{branch:name},`Agora em ${name}.`)){setSelected('');reset();}}
   function dropMerge(source:string,dest:string){if(source===dest)return;if(s?.merging){setError('Já existe um merge em andamento. Resolva os conflitos ou aborte antes.');return;}openMerge(source,dest);}
   const dnd=(name:string,canDrag=true)=>({draggable:canDrag,
-    onDragStart:(e:React.DragEvent)=>{e.dataTransfer.setData(DRAG,name);e.dataTransfer.effectAllowed='move';setDrag(name);},
-    onDragEnd:()=>{setDrag(null);setDropOn(null);},
+    onDragStart:(e:React.DragEvent)=>{e.stopPropagation();e.dataTransfer.setData(DRAG,name);e.dataTransfer.effectAllowed='move';setTimeout(()=>setDrag(name),0);}, // mexer na tela dentro do dragstart pode cancelar o arrastar no Chromium
+    onDragEnd:()=>{setDrag(null);setDropOn(null);setDragRow(null);},
     onDragOver:(e:React.DragEvent)=>{if(!e.dataTransfer.types.includes(DRAG)||drag===name)return;e.preventDefault();e.dataTransfer.dropEffect='move';if(dropOn!==name)setDropOn(name);},
     onDragLeave:(e:React.DragEvent)=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDropOn(d=>d===name?null:d);},
-    onDrop:(e:React.DragEvent)=>{e.preventDefault();const src=e.dataTransfer.getData(DRAG)||drag;setDrag(null);setDropOn(null);if(src&&src!==name)dropMerge(src,name);}});
+    onDrop:(e:React.DragEvent)=>{e.preventDefault();e.stopPropagation();const src=e.dataTransfer.getData(DRAG)||drag;setDrag(null);setDropOn(null);setDragRow(null);if(src&&src!==name)dropMerge(src,name);}});
+  useEffect(()=>{if(!drag)return;const end=()=>{setDrag(null);setDropOn(null);setDragRow(null);};document.addEventListener('dragend',end);document.addEventListener('drop',end);return()=>{document.removeEventListener('dragend',end);document.removeEventListener('drop',end);};},[drag]);
   function openBranch(fromSelected=false){setBranchName('');setBranchFrom(fromSelected?'selected':'head');setBranchCheckout(true);setDialog('branch');}
   function openPull(){setPullMode(s&&s.ahead>0&&s.behind>0?'merge':'ff');setDialog('pull');}
   async function runMerge(){const dest=preview?.into||into||s?.branch;const r=await action('merge',{branch:target,into:into||undefined},`${target} integrada em ${dest}.`);if(r){setDialog(null);afterMerge(r,`${target} integrada em ${dest}.${preview?.intoRemote?' Faça Push para publicar.':''}`);}}
@@ -497,20 +499,20 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
             <div className="zoom"><button aria-label="Diminuir" disabled={zoom<=.75} onClick={()=>setZoom(z=>Math.max(.75,z-.125))}><Minus size={12}/></button><span>{Math.round(zoom*100)}%</span><button aria-label="Aumentar" disabled={zoom>=1.5} onClick={()=>setZoom(z=>Math.min(1.5,z+.125))}><Plus size={12}/></button><button aria-label="Ir ao topo" onClick={()=>{setZoom(1);scroll.current?.scrollTo({top:0});}}><Maximize2 size={12}/></button></div>
           </div>
           <div className="graph-head" style={{gridTemplateColumns:`${refW}px ${graphW}px minmax(200px,1fr) 150px 120px 76px`}}><span>BRANCH / TAG</span><span>GRAFO</span><span>MENSAGEM DO COMMIT</span><span>AUTOR</span><span>DATA</span><span>HASH</span></div>
-          <div className="graph-scroll" ref={scroll} tabIndex={0} aria-label="Histórico de commits">
+          <div className={`graph-scroll ${drag?'dnd-active':''}`} ref={scroll} tabIndex={0} aria-label="Histórico de commits">
             {!rows.length&&<div className="empty"><GitCommitHorizontal size={26}/><b>Nenhum commit ainda.</b><p>Prepare arquivos e faça o primeiro commit.</p></div>}
             <div className="graph-stage" style={{height:rows.length*rowH}}>
               {rows.map((c,i)=>{const lane=layout.cols.get(c.sha)||0;const isWip=c.sha===WIP;const sel=isWip?showWip:c.sha===shownCommit?.sha;const ls=labels.get(c.sha)||[];const isHead=c.sha===s.head;return <div key={c.sha} data-sha={c.sha} role="button" tabIndex={-1}
                 className={`row ${sel?'selected':''} ${matches.has(c.sha)?'':'dim'} ${headChain.has(c.sha)?'on-head':''} ${isWip?'wip':''}`}
                 style={{top:i*rowH,height:rowH,gridTemplateColumns:`${refW}px ${graphW}px minmax(200px,1fr) 150px 120px 76px`,'--lane':color(lane)} as CSSProperties}
                 onClick={()=>select(c.sha)} onContextMenu={e=>{if(!isWip)commitMenu(e,c);}}>
-                <span className={`refs ${ls.length>1?'multi':''}`}>{isWip?<span className="ref-pill wip-pill" style={{'--lane':color(lane)} as CSSProperties}><Pencil size={11}/><span className="pill-text">WIP</span></span>:<>{ls.slice(0,1).map(l=>pill(l,i))}{ls.length>1&&<span className="more">+{ls.length-1}</span>}
+                <span className={`refs ${ls.length>1?'multi':''} ${dragRow===c.sha?'open':''}`} onDragEnter={()=>{if(drag&&ls.length>1&&dragRow!==c.sha)setDragRow(c.sha);}} onDragLeave={e=>{if(dragRow===c.sha&&!e.currentTarget.contains(e.relatedTarget as Node))setDragRow(null);}}>{isWip?<span className="ref-pill wip-pill" style={{'--lane':color(lane)} as CSSProperties}><Pencil size={11}/><span className="pill-text">WIP</span></span>:<>{ls.slice(0,1).map(l=>pill(l,i))}{ls.length>1&&<span className="more">+{ls.length-1}</span>}
                   {ls.length>1&&<span className={`refs-pop ${i>=4&&i>=rows.length-4?'up':''}`} onClick={e=>e.stopPropagation()} onDoubleClick={e=>e.stopPropagation()}>
                     <span className="refs-pop-title">{ls.length} referências neste commit · clique para fazer checkout</span>
-                    {ls.map(l=>{const ref=l.local||l.remote;return <button key={l.key} type="button" {...(ref?dnd(ref):{})} className={`refs-pop-item ${l.current?'current':''}`} disabled={!!busy||l.current} style={{'--lane':color(lane)} as CSSProperties}
+                    {ls.map(l=>{const ref=l.local||l.remote;return <button key={l.key} type="button" {...(ref?dnd(ref):{})} className={`refs-pop-item ${l.current?'current':''} ${ref&&dropOn===ref?'drop':''}`} disabled={!!busy} aria-disabled={l.current||undefined} style={{'--lane':color(lane)} as CSSProperties}
                       title={ref?(l.current?`${l.text} é a branch atual`:`Checkout de ${ref} · arraste sobre outra branch para fazer merge`):`Tag ${l.text}`}
                       onContextMenu={e=>l.tag?tagMenu(e,l.text,l.sha):branchMenu(e,ref!)}
-                      onClick={()=>{if(ref)void openSwitch(ref);else select(l.sha,true);}}>
+                      onClick={()=>{if(l.current)return;if(ref)void openSwitch(ref);else select(l.sha,true);}}>
                       {l.current?<Check size={12}/>:l.tag?<Tag size={12}/>:l.local?<Laptop size={12}/>:<Cloud size={12}/>}
                       <span className="refs-pop-name">{l.text}</span>
                       {l.local&&l.remote&&<Cloud size={11} className="muted"/>}
