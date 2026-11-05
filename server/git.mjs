@@ -15,9 +15,9 @@ export class GitRepository {
   try{const top=(await repo.git(['rev-parse','--show-toplevel'])).trim();repo.root=await realpath(top);}catch{throw new GitError('Essa pasta não pertence a um repositório Git de trabalho.');}
   return repo;
  }
- async git(args,{allow=[0],timeout=30000,audit=false,env={}}={}){
+ async git(args,{allow=[0],timeout=30000,audit=false,env={},literal=true}={}){
   const command='git '+args.map(s=>/^[\w@{}.:/=-]+$/.test(s)?s:JSON.stringify(s)).join(' ');
-  try{const r=await exec('git',['--literal-pathspecs','-C',this.root,'--no-pager',...args],{encoding:'utf8',maxBuffer:16*1024*1024,timeout,env:{...process.env,GIT_TERMINAL_PROMPT:'0',GIT_PAGER:'cat',LC_ALL:'C',...env}});if(audit)this.record(command,r.stdout||r.stderr,true);return r.stdout;
+  try{const r=await exec('git',[...(literal?['--literal-pathspecs']:[]),'-C',this.root,'--no-pager',...args],{encoding:'utf8',maxBuffer:16*1024*1024,timeout,env:{...process.env,GIT_TERMINAL_PROMPT:'0',GIT_PAGER:'cat',LC_ALL:'C',...env}});if(audit)this.record(command,r.stdout||r.stderr,true);return r.stdout;
   }catch(e){if(allow.includes(e.code))return e.stdout||'';const output=(e.stderr||e.stdout||e.message||'Git falhou.').slice(0,12000);if(audit)this.record(command,output,false);throw new GitError(e.killed?'O Git excedeu o tempo limite. Verifique a autenticação no terminal.':output,409);}
  }
  record(command,output,success){this.audit.unshift({command,output:output.slice(0,12000),success,date:new Date().toISOString()});this.audit=this.audit.slice(0,20);}
@@ -31,9 +31,9 @@ export class GitRepository {
   let upstream=null,ahead=0,behind=0,remote=null;
   if(head){try{upstream=(await this.git(['rev-parse','--abbrev-ref','--symbolic-full-name','@{upstream}'])).trim();const values=(await this.git(['rev-list','--left-right','--count',`HEAD...${upstream}`])).trim().split(/\s+/);ahead=Number(values[0]);behind=Number(values[1]);remote=(await this.git(['config','--get',`branch.${branch.trim()}.remote`],{allow:[0,1]})).trim()||null;}catch{upstream=null;}}
   const fetchDate=await this.fetchDate();
-  const merging=await this.mergeState();
+  const [merging,stashes]=await Promise.all([this.mergeState(),this.stashes()]);
   const lastTag=(await this.git(['for-each-ref','--sort=-creatordate','--count=1','--format=%(refname:strip=2)','refs/tags/'])).trim()||null;
-  return {root:this.root,lastTag,branch:branch.trim()||null,head,files,merging,branches:refs.branches,tags:refs.tags,upstream,ahead,behind,remote,remotes:remotes.trim().split('\n').filter(Boolean),lastFetch:fetchDate,autoFetchError:this.auto.error,indexFingerprint,conflicted:files.some(f=>f.conflicted),audit:this.audit};
+  return {root:this.root,lastTag,branch:branch.trim()||null,head,files,merging,branches:refs.branches,tags:refs.tags,upstream,ahead,behind,remote,remotes:remotes.trim().split('\n').filter(Boolean),lastFetch:fetchDate,autoFetchError:this.auto.error,stashes,indexFingerprint,conflicted:files.some(f=>f.conflicted),audit:this.audit};
  }
  async history(){
   const format='%H%x00%P%x00%an%x00%aI%x00%B%x00';const head=await this.head();if(!head)return {repository:path.basename(this.root),defaultBranch:(await this.git(['branch','--show-current'])).trim()||'main',branches:[],tags:[],commits:[],truncated:false};
@@ -63,6 +63,79 @@ export class GitRepository {
   if(!stash||stash===before)throw new GitError('O Git não encontrou alterações para descartar nesses arquivos.',409);
   return {stash,count:names.length,message:`${names.length===1?names[0]+' descartado':names.length+' arquivos descartados'}. Dá para desfazer.`};
  });}
+ // ---- Stashes ----
+ // Lista na ordem do Git (stash@{0} é o mais recente). As ações recebem o hash, não o índice: se outro
+ // stash for criado entre a tela e o clique, o índice muda, o hash não.
+ async stashes(){
+  const raw=await this.git(['stash','list','--format=%H%x00%P%x00%aI%x00%gs%x00'],{allow:[0,128]});const parts=raw.split('\0');const list=[];
+  for(let i=0;i+3<parts.length;i+=4){const sha=parts[i].trim();if(!sha)continue;const parents=parts[i+1].trim().split(' ').filter(Boolean);const subject=parts[i+3];const m=/^(?:WIP on|On) ([^:]*): (.*)$/s.exec(subject);
+   list.push({sha,index:list.length,base:parents[0]||null,untracked:parents.length>2,date:parts[i+2],branch:m?m[1]:null,message:(m?m[2]:subject).trim()||'(sem mensagem)'});}
+  return list;
+ }
+ async stashRef(sha){if(typeof sha!=='string'||!/^[a-f0-9]{40,64}$/.test(sha))throw new GitError('Stash inválido.');const st=(await this.stashes()).find(x=>x.sha===sha);if(!st)throw new GitError('Esse stash não existe mais. Atualize a tela.',409);return {...st,ref:`stash@{${st.index}}`};}
+ async stashPush({message='',untracked=true,staged=false}={}){return this.mutate(async()=>{
+  if(typeof message!=='string'||message.length>500)throw new GitError('Mensagem inválida.');
+  if(await this.mergeState())throw new GitError('Conclua ou aborte o merge em andamento antes de fazer stash.',409);
+  if(!await this.head())throw new GitError('Ainda não há commits neste repositório: faça o primeiro commit antes de usar stash.');
+  const files=await this.files();
+  if(files.some(f=>f.conflicted))throw new GitError('Resolva os conflitos antes de fazer stash.',409);
+  if(staged&&!files.some(f=>f.staged))throw new GitError('Não há nada em Staged para guardar.');
+  if(!files.some(f=>untracked||!f.untracked))throw new GitError(files.length?'Só há arquivos novos (não rastreados): marque "Incluir arquivos novos".':'Não há alterações para guardar.');
+  const before=await this.stashTop();
+  await this.git(['stash','push',...(staged?['--staged']:untracked?['--include-untracked']:[]),...(message.trim()?['-m',message.trim()]:[])],{audit:true,literal:false}); // sem caminhos; com --literal-pathspecs o -u ignora os arquivos novos
+  if(await this.stashTop()===before)throw new GitError('O Git não encontrou alterações para guardar.',409);
+  return {message:'Alterações guardadas no stash.'};
+ });}
+ // Aplica o stash (com o que estava em Staged de volta em Staged, quando dá). Com pop, apaga o stash
+ // só se tudo voltou sem conflito; havendo conflito ele fica guardado, como no git stash pop.
+ async stashApply({sha,pop=false}={}){return this.mutate(async()=>{
+  if(await this.mergeState())throw new GitError('Conclua ou aborte o merge em andamento antes de aplicar um stash.',409);
+  if((await this.files()).some(f=>f.conflicted))throw new GitError('Resolva os conflitos atuais antes de aplicar outro stash.',409);
+  let st=await this.stashRef(sha);let output;
+  const conflicted=async()=>(await this.files()).filter(f=>f.conflicted).map(f=>f.path);
+  try{output=await this.git(['stash','apply','--index',st.ref],{audit:true});}
+  catch(e){
+   let list=await conflicted();
+   if(!list.length&&/--index|conflicts in index/i.test(e.message)){try{output=await this.git(['stash','apply',st.ref],{audit:true});}catch(e2){list=await conflicted();if(!list.length)throw e2;e=e2;}}
+   else if(!list.length)throw e;
+   if(list.length)return {conflicts:list,message:`O stash entrou com conflito em ${list.length} ${list.length===1?'arquivo':'arquivos'}.${pop?' Ele continua guardado.':''}`};
+  }
+  if(pop){st=await this.stashRef(sha);await this.git(['stash','drop',st.ref],{audit:true});}
+  return {conflicts:[],message:pop?'Stash aplicado e removido.':'Stash aplicado. Ele continua guardado.',output};
+ });}
+ async stashDrop({sha}={}){return this.mutate(async()=>{const st=await this.stashRef(sha);await this.git(['stash','drop',st.ref],{audit:true});return {message:'Stash apagado.'};});}
+ // Desfaz o "apagar stash": o commit do stash continua no repositório por um tempo e volta à lista.
+ async stashRestore({sha,message}={}){return this.mutate(async()=>{
+  if(typeof sha!=='string'||!/^[a-f0-9]{40,64}$/.test(sha))throw new GitError('Stash inválido.');
+  if((await this.stashes()).some(x=>x.sha===sha))return {message:'O stash já está na lista.'};
+  if((await this.git(['cat-file','-t',sha],{allow:[0,128]})).trim()!=='commit')throw new GitError('Esse stash não pode mais ser recuperado.',409);
+  await this.git(['stash','store','-m',typeof message==='string'&&message.trim()?message.trim().slice(0,500):'Stash recuperado',sha],{audit:true});
+  return {message:'Stash recuperado.'};
+ });}
+ // Cria uma branch no commit em que o stash foi feito, troca para ela e aplica o stash ali (sem conflito).
+ async stashBranch({sha,name}={}){return this.mutate(async()=>{
+  const clean=typeof name==='string'?name.trim():'';
+  if(!clean||clean.startsWith('-'))throw new GitError('Informe um nome de branch.');
+  await this.git(['check-ref-format','--branch',clean]).catch(()=>{throw new GitError('Nome de branch inválido.');});
+  if((await this.refs()).branches.some(b=>!b.remote&&b.name===clean))throw new GitError(`Já existe uma branch ${clean}.`);
+  if((await this.files()).some(f=>!f.untracked))throw new GitError('Guarde ou faça commit das alterações atuais antes: a branch nova começa limpa.',409);
+  const st=await this.stashRef(sha);
+  await this.git(['stash','branch',clean,st.ref],{audit:true});
+  return {message:`Branch ${clean} criada com as alterações do stash.`};
+ });}
+ async stashFiles(sha){
+  const st=await this.stashRef(sha);const files=new Map();
+  const read=(raw,untracked)=>{const parts=raw.split('\0');for(let i=0;i<parts.length;i++){const row=parts[i].split('\t');if(row.length<3)continue;let filename=row.slice(2).join('\t');if(!filename){i++;filename=parts[++i];}if(!filename)continue;files.set(filename,{path:filename,additions:Number(row[0])||0,deletions:Number(row[1])||0,binary:row[0]==='-',untracked});}};
+  if(st.base)read(await this.git(['diff','--numstat','-z','--no-renames',st.base,st.sha]),false);
+  if(st.untracked)read(await this.git(['show','--format=','--numstat','-z',`${st.sha}^3`]),true);
+  return {files:[...files.values()]};
+ }
+ async stashDiff(sha,filename){
+  const st=await this.stashRef(sha);
+  let out=st.base?await this.git(['diff','--no-ext-diff','--no-textconv',st.base,st.sha,'--',filename]):'';
+  if(!out&&st.untracked)out=await this.git(['show','--format=','--no-ext-diff','--no-textconv',`${st.sha}^3`,'--',filename]);
+  return out.length>250000?out.slice(0,250000)+'\n[diff truncado em 250 KB]':out||'Nenhuma diferença textual neste arquivo.';
+ }
  async stashTop(){return (await this.git(['rev-parse','--verify','--quiet','refs/stash'],{allow:[0,1]})).trim()||null;}
  async undoDiscard(stash){return this.mutate(async()=>{
   if(typeof stash!=='string'||!/^[a-f0-9]{40,64}$/.test(stash))throw new GitError('Descarte inválido.');
@@ -336,8 +409,9 @@ export class GitRepository {
   if(!remote||remote.startsWith('-'))throw new GitError('Este clone não tem remoto configurado.');
   return this.git(['push','--set-upstream','--',remote,`refs/heads/${s.branch}:refs/heads/${s.branch}`],{audit:true,timeout:120000});
  });}
- async diff({path:filename,staged=false,sha}){
+ async diff({path:filename,staged=false,sha,stash=false}){
   if(typeof filename!=='string'||filename.length>2000||filename.includes('\0'))throw new GitError('Caminho inválido.');
+  if(stash)return this.stashDiff(sha,filename);
   if(sha){if(!/^[a-f0-9]{40,64}$/.test(sha))throw new GitError('Hash inválido.');const h=await this.history();if(!h.commits.some(c=>c.sha===sha))throw new GitError('Commit fora do histórico carregado.');const result=await this.git(['show','--format=','--no-ext-diff','--no-textconv',sha,'--',filename]);return result.slice(0,250000);}
   const files=await this.files(),f=files.find(f=>f.path===filename);if(!f)throw new GitError('Arquivo não está mais na lista de alterações.');
   if(f.conflicted){const target=path.resolve(this.root,filename);if(!target.startsWith(this.root+path.sep))throw new GitError('Arquivo fora do repositório.');let b;try{const actual=await realpath(target);if(!actual.startsWith(this.root+path.sep))throw new Error();b=await readFile(actual);}catch{return 'O arquivo foi removido em um dos lados do merge. Escolha a sua versão ou a versão deles.';}if(b.length>250000)return 'Arquivo maior que 250 KB. Resolva o conflito no seu editor.';return b.includes(0)?'Arquivo binário em conflito. Escolha a sua versão ou a versão deles.':b.toString('utf8');}

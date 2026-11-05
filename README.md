@@ -45,6 +45,11 @@ A atualização automática começou na versão 0.4.0. Quem tem uma versão ante
   - Em cada arquivo, ou em **Descartar** no topo de Unstaged para todos de uma vez. Sempre pede confirmação.
   - O arquivo volta a ficar como no último commit: arquivos apagados voltam e arquivos novos somem.
   - Nada se perde de vez. As alterações vão para o stash do Git como "Briar: descartado…" e o aviso que aparece depois tem **Desfazer**. Mais tarde dá para recuperar com `git stash list` e `git stash apply`.
+- **Stash do WIP.**
+  - **Stash** no topo, ou no painel do WIP, guarda as alterações e limpa a área de trabalho. Dá para guardar só o que está em Staged e escolher se os arquivos novos entram.
+  - Os stashes ficam na seção **STASHES** da lateral. Clicar num deles abre as opções e mostra os arquivos e o diff: **Pop** (aplica e remove), **Aplicar** (mantém guardado), **Branch** (cria uma branch onde o stash foi feito e o aplica ali) e **Apagar**, que tem **Desfazer** logo depois.
+  - **Pop** no topo traz de volta o stash mais recente.
+  - Se aplicar der conflito, os arquivos vão para "Conflitos" no WIP e o stash continua guardado.
 - **Checkout com duplo clique.** Numa branch remota cuja local já existe (ex.: `origin/main` com `main`), o Briar troca para a local e a atualiza até o remoto quando possível. Se elas divergiram, ele avisa para fazer merge.
 - **Arrastar para fazer merge.** Arraste uma branch sobre outra: na lateral, num rótulo do grafo ou no seletor de branch do topo.
   - Antes do merge aparece quantos commits entram e quais arquivos vão dar conflito.
