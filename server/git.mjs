@@ -7,7 +7,7 @@ import {createHash} from 'node:crypto';
 const exec=promisify(execFile);
 export class GitError extends Error {constructor(message,status=400){super(message);this.status=status;}}
 export class GitRepository {
- constructor(root){this.root=root;this.lastFetch=null;this.audit=[];this.tail=Promise.resolve();}
+ constructor(root){this.root=root;this.lastFetch=null;this.audit=[];this.tail=Promise.resolve();this.auto={running:null,failedAt:0,error:null};}
  static async open(input){
   if(typeof input!=='string'||!input.trim()||input.includes('\0'))throw new GitError('Informe o caminho de um clone Git local.');
   let root;try{root=await realpath(path.resolve(input==='~'?homedir():input.startsWith('~/')?path.join(homedir(),input.slice(2)):input));}catch{throw new GitError('A pasta não existe ou não pode ser lida.');}
@@ -15,9 +15,9 @@ export class GitRepository {
   try{const top=(await repo.git(['rev-parse','--show-toplevel'])).trim();repo.root=await realpath(top);}catch{throw new GitError('Essa pasta não pertence a um repositório Git de trabalho.');}
   return repo;
  }
- async git(args,{allow=[0],timeout=30000,audit=false}={}){
+ async git(args,{allow=[0],timeout=30000,audit=false,env={}}={}){
   const command='git '+args.map(s=>/^[\w@{}.:/=-]+$/.test(s)?s:JSON.stringify(s)).join(' ');
-  try{const r=await exec('git',['--literal-pathspecs','-C',this.root,'--no-pager',...args],{encoding:'utf8',maxBuffer:16*1024*1024,timeout,env:{...process.env,GIT_TERMINAL_PROMPT:'0',GIT_PAGER:'cat',LC_ALL:'C'}});if(audit)this.record(command,r.stdout||r.stderr,true);return r.stdout;
+  try{const r=await exec('git',['--literal-pathspecs','-C',this.root,'--no-pager',...args],{encoding:'utf8',maxBuffer:16*1024*1024,timeout,env:{...process.env,GIT_TERMINAL_PROMPT:'0',GIT_PAGER:'cat',LC_ALL:'C',...env}});if(audit)this.record(command,r.stdout||r.stderr,true);return r.stdout;
   }catch(e){if(allow.includes(e.code))return e.stdout||'';const output=(e.stderr||e.stdout||e.message||'Git falhou.').slice(0,12000);if(audit)this.record(command,output,false);throw new GitError(e.killed?'O Git excedeu o tempo limite. Verifique a autenticação no terminal.':output,409);}
  }
  record(command,output,success){this.audit.unshift({command,output:output.slice(0,12000),success,date:new Date().toISOString()});this.audit=this.audit.slice(0,20);}
@@ -30,11 +30,10 @@ export class GitRepository {
   const [files,branch,head,refs,indexFingerprint,remotes]=await Promise.all([this.files(),this.git(['branch','--show-current']),this.head(),this.refs(),this.indexFingerprint(),this.git(['remote'])]);
   let upstream=null,ahead=0,behind=0,remote=null;
   if(head){try{upstream=(await this.git(['rev-parse','--abbrev-ref','--symbolic-full-name','@{upstream}'])).trim();const values=(await this.git(['rev-list','--left-right','--count',`HEAD...${upstream}`])).trim().split(/\s+/);ahead=Number(values[0]);behind=Number(values[1]);remote=(await this.git(['config','--get',`branch.${branch.trim()}.remote`],{allow:[0,1]})).trim()||null;}catch{upstream=null;}}
-  let fetchDate=this.lastFetch;
-  if(!fetchDate){try{const fp=(await this.git(['rev-parse','--git-path','FETCH_HEAD'])).trim();const s=await stat(path.resolve(this.root,fp));fetchDate=s.mtime.toISOString();}catch{}}
+  const fetchDate=await this.fetchDate();
   const merging=await this.mergeState();
   const lastTag=(await this.git(['for-each-ref','--sort=-creatordate','--count=1','--format=%(refname:strip=2)','refs/tags/'])).trim()||null;
-  return {root:this.root,lastTag,branch:branch.trim()||null,head,files,merging,branches:refs.branches,tags:refs.tags,upstream,ahead,behind,remote,remotes:remotes.trim().split('\n').filter(Boolean),lastFetch:fetchDate,indexFingerprint,conflicted:files.some(f=>f.conflicted),audit:this.audit};
+  return {root:this.root,lastTag,branch:branch.trim()||null,head,files,merging,branches:refs.branches,tags:refs.tags,upstream,ahead,behind,remote,remotes:remotes.trim().split('\n').filter(Boolean),lastFetch:fetchDate,autoFetchError:this.auto.error,indexFingerprint,conflicted:files.some(f=>f.conflicted),audit:this.audit};
  }
  async history(){
   const format='%H%x00%P%x00%an%x00%aI%x00%B%x00';const head=await this.head();if(!head)return {repository:path.basename(this.root),defaultBranch:(await this.git(['branch','--show-current'])).trim()||'main',branches:[],tags:[],commits:[],truncated:false};
@@ -112,7 +111,28 @@ export class GitRepository {
  }
  localNameOf(name,remotes){const r=[...remotes].sort((a,b)=>b.length-a.length).find(r=>name.startsWith(r+'/'));return r?name.slice(r.length+1):'';}
  async isAncestor(a,b){try{await this.git(['merge-base','--is-ancestor',a,b]);return true;}catch{return false;}}
- async fetch(){return this.mutate(async()=>{const s=await this.status();const remote=s.remote&&s.remote!=='.'?s.remote:s.remotes.includes('origin')?'origin':s.remotes[0];if(!remote)throw new GitError('Este clone não tem remoto configurado.');const result=await this.git(['fetch','--prune','--',remote],{audit:true,timeout:90000});this.lastFetch=new Date().toISOString();return result;});}
+ // Último fetch: o do Briar ou, se não houver, a data do FETCH_HEAD (fetch feito no terminal também conta).
+ async fetchDate(){let date=this.lastFetch;try{const fp=(await this.git(['rev-parse','--git-path','FETCH_HEAD'])).trim();const m=(await stat(path.resolve(this.root,fp))).mtime.toISOString();if(!date||m>date)date=m;}catch{}return date;}
+ async fetchRemote(){const s=await this.status();return s.remote&&s.remote!=='.'?s.remote:s.remotes.includes('origin')?'origin':s.remotes[0]||null;}
+ async fetch(){return this.mutate(async()=>{const remote=await this.fetchRemote();if(!remote)throw new GitError('Este clone não tem remoto configurado.');const result=await this.git(['fetch','--prune','--',remote],{audit:true,timeout:90000});this.lastFetch=new Date().toISOString();this.auto.error=null;this.auto.failedAt=0;return result;});}
+ // Fetch automático (foco da janela, troca de aba, timer). Silencioso: não entra no histórico de
+ // comandos, nunca abre pedido de senha/passphrase e respeita um intervalo mínimo desde o último
+ // fetch. Se falhar (sem rede, sem credencial), espera alguns minutos antes de tentar de novo.
+ async autoFetch({minAge=60000,retryAfter=300000}={}){
+  if(this.auto.running)return {skipped:'running'};
+  if(Date.now()-this.auto.failedAt<retryAfter)return {skipped:'backoff'};
+  const last=await this.fetchDate();if(last&&Date.now()-Date.parse(last)<minAge)return {skipped:'recent'};
+  const run=this.mutate(async()=>{
+   const remote=await this.fetchRemote();if(!remote)return {skipped:'no-remote'};
+   const before=await this.git(['for-each-ref','--format=%(refname) %(objectname)','refs/remotes/','refs/tags/']);
+   try{await this.git(['fetch','--prune','--',remote],{timeout:30000,env:{SSH_ASKPASS_REQUIRE:'never',GCM_INTERACTIVE:'never',GIT_ASKPASS:'',SSH_ASKPASS:''}});}
+   catch(e){this.auto.failedAt=Date.now();this.auto.error=e.message.trim().split('\n').filter(Boolean).pop()||'Falha no fetch automático.';return {error:this.auto.error};}
+   this.lastFetch=new Date().toISOString();this.auto.failedAt=0;this.auto.error=null;
+   const after=await this.git(['for-each-ref','--format=%(refname) %(objectname)','refs/remotes/','refs/tags/']);
+   return {fetched:true,changed:before!==after};
+  });
+  this.auto.running=run;try{return await run;}finally{this.auto.running=null;}
+ }
  async pull({mode='ff'}={}){return this.mutate(async()=>{
   const s=await this.status();
   if(s.merging)throw new GitError('Conclua ou aborte o merge em andamento antes do pull.',409);
