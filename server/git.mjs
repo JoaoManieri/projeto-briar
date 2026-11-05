@@ -33,7 +33,8 @@ export class GitRepository {
   let fetchDate=this.lastFetch;
   if(!fetchDate){try{const fp=(await this.git(['rev-parse','--git-path','FETCH_HEAD'])).trim();const s=await stat(path.resolve(this.root,fp));fetchDate=s.mtime.toISOString();}catch{}}
   const merging=await this.mergeState();
-  return {root:this.root,branch:branch.trim()||null,head,files,merging,branches:refs.branches,tags:refs.tags,upstream,ahead,behind,remote,remotes:remotes.trim().split('\n').filter(Boolean),lastFetch:fetchDate,indexFingerprint,conflicted:files.some(f=>f.conflicted),audit:this.audit};
+  const lastTag=(await this.git(['for-each-ref','--sort=-creatordate','--count=1','--format=%(refname:strip=2)','refs/tags/'])).trim()||null;
+  return {root:this.root,lastTag,branch:branch.trim()||null,head,files,merging,branches:refs.branches,tags:refs.tags,upstream,ahead,behind,remote,remotes:remotes.trim().split('\n').filter(Boolean),lastFetch:fetchDate,indexFingerprint,conflicted:files.some(f=>f.conflicted),audit:this.audit};
  }
  async history(){
   const format='%H%x00%P%x00%an%x00%aI%x00%B%x00';const head=await this.head();if(!head)return {repository:path.basename(this.root),defaultBranch:(await this.git(['branch','--show-current'])).trim()||'main',branches:[],tags:[],commits:[],truncated:false};
@@ -222,6 +223,83 @@ export class GitRepository {
     if(/does not have/i.test(e.message))return this.git(['rm','--',filename],{audit:true});throw e;});
   }
   return this.git(['add','-A','--',filename],{audit:true});
+ });}
+ // ---- Tags e exclusão de branches (menu do botão direito) ----
+ defaultRemote(s){const r=s.remote&&s.remote!=='.'?s.remote:s.remotes.includes('origin')?'origin':s.remotes[0];if(!r||r.startsWith('-'))throw new GitError('Este clone não tem remoto configurado.');return r;}
+ async validTagName(name){
+  if(typeof name!=='string')throw new GitError('Nome de tag inválido.');
+  const clean=name.trim();
+  if(!clean||clean.length>200||clean.startsWith('-')||clean.includes('\0'))throw new GitError('Nome de tag inválido.');
+  try{await this.git(['check-ref-format','refs/tags/'+clean]);}catch{throw new GitError('Nome de tag inválido para o Git (evite espaços, "..", "~", "^", ":" e "?").');}
+  return clean;
+ }
+ async createTag({name,sha,message,push=false}={}){return this.mutate(async()=>{
+  const clean=await this.validTagName(name);
+  const s=await this.status();
+  if(s.tags.some(t=>t.name===clean))throw new GitError(`A tag ${clean} já existe. Escolha outro nome (por exemplo, o próximo número).`,409);
+  if(typeof sha!=='string'||!/^[a-f0-9]{40,64}$/.test(sha))throw new GitError('Commit da tag inválido.');
+  await this.git(['cat-file','-e',sha+'^{commit}']).catch(()=>{throw new GitError('Commit da tag não encontrado.');});
+  if(message!==undefined&&(typeof message!=='string'||message.length>10000||message.includes('\0')))throw new GitError('Mensagem da tag inválida.');
+  const text=(message||'').trim();
+  await this.git(text?['tag','-a','-m',text,'--',clean,sha]:['tag','--',clean,sha],{audit:true});
+  if(!push)return {message:`Tag ${clean} criada (só local).`};
+  const remote=this.defaultRemote(s);
+  try{await this.git(['push','--',remote,`refs/tags/${clean}`],{audit:true,timeout:120000});}
+  catch(e){throw new GitError(`A tag ${clean} foi criada aqui, mas o push para ${remote} falhou. Tente de novo pelo botão direito na tag → Push.\n\n${e.message}`,409);}
+  return {message:`Tag ${clean} criada e enviada para ${remote}.`};
+ });}
+ async pushTag(name){return this.mutate(async()=>{
+  const s=await this.status();
+  if(!s.tags.some(t=>t.name===name))throw new GitError('Tag não encontrada.');
+  const remote=this.defaultRemote(s);
+  await this.git(['push','--',remote,`refs/tags/${name}`],{audit:true,timeout:120000});
+  return {message:`Tag ${name} enviada para ${remote}.`};
+ });}
+ async deleteTag({name,local=false,remote=false}={}){return this.mutate(async()=>{
+  if(!local&&!remote)throw new GitError('Escolha onde apagar a tag.');
+  const s=await this.status();
+  if(typeof name!=='string'||!s.tags.some(t=>t.name===name))throw new GitError('Tag não encontrada.');
+  const done=[];
+  if(remote){const r=this.defaultRemote(s);await this.git(['push','--',r,`:refs/tags/${name}`],{audit:true,timeout:120000});done.push(`no ${r}`);}
+  if(local){await this.git(['tag','-d','--',name],{audit:true});done.push('local');}
+  return {message:`Tag ${name} apagada (${done.join(' e ')}).`};
+ });}
+ // Apaga a branch local, a remota ou as duas. Se os commits dela não estiverem em nenhuma outra
+ // branch (local ou remota), recusa sem "force" para não perder trabalho.
+ async deleteBranch({branch,scope='local',force=false}={}){return this.mutate(async()=>{
+  if(!['local','remote','both'].includes(scope))throw new GitError('Escolha onde apagar a branch.');
+  const s=await this.status();
+  const entry=s.branches.find(b=>b.name===branch);
+  if(!entry)throw new GitError('Branch não encontrada.');
+  let local=null,remote=null;
+  if(entry.remote){
+   const r=[...s.remotes].sort((a,b)=>b.length-a.length).find(r=>branch.startsWith(r+'/'));
+   if(!r)throw new GitError('Referência remota inválida.');
+   remote={remote:r,name:branch.slice(r.length+1),full:branch,sha:entry.sha};
+   const ln=remote.name;const l=s.branches.find(b=>!b.remote&&b.name===ln);if(l)local={name:ln,sha:l.sha};
+  }else{
+   local={name:branch,sha:entry.sha};
+   const up=(await this.git(['rev-parse','--abbrev-ref','--symbolic-full-name',`refs/heads/${branch}@{upstream}`],{allow:[0,128]})).trim();
+   const r=s.remotes.find(r=>up.startsWith(r+'/'))||null;
+   const full=r?up:s.remotes.map(r=>`${r}/${branch}`).find(n=>s.branches.some(b=>b.remote&&b.name===n));
+   if(full){const rr=s.remotes.find(r=>full.startsWith(r+'/'));const rb=s.branches.find(b=>b.remote&&b.name===full);if(rb)remote={remote:rr,name:full.slice(rr.length+1),full,sha:rb.sha};}
+  }
+  const delLocal=scope!=='remote',delRemote=scope!=='local';
+  if(delLocal&&!local)throw new GitError(`Não existe branch local ${entry.remote?branch.slice(branch.indexOf('/')+1):branch}.`);
+  if(delRemote&&!remote)throw new GitError(`A branch ${branch} não existe no remoto (faça fetch se acabou de ser criada).`);
+  if(delLocal&&local.name===s.branch)throw new GitError(`${local.name} é a branch atual. Faça checkout de outra branch antes de apagá-la.`,409);
+  if(delRemote&&remote.name.startsWith('-'))throw new GitError('Nome de branch inválido.');
+  if(!force){
+   const gone=new Set([...(delLocal?['refs/heads/'+local.name]:[]),...(delRemote?['refs/remotes/'+remote.full]:[])]);
+   for(const sha of new Set([delLocal&&local.sha,delRemote&&remote.sha].filter(Boolean))){
+    const holders=(await this.git(['for-each-ref','--contains',sha,'--format=%(refname)','refs/heads/','refs/remotes/'])).split('\n').filter(r=>r&&!r.endsWith('/HEAD')&&!gone.has(r));
+    if(!holders.length&&!(s.head&&await this.isAncestor(sha,'HEAD')))throw new GitError(`Os commits de ${branch} não estão em nenhuma outra branch: apagar faria perder esse trabalho. Faça merge antes, ou marque "Apagar mesmo assim".`,409);
+   }
+  }
+  const done=[];
+  if(delRemote){await this.git(['push','--',remote.remote,`:refs/heads/${remote.name}`],{audit:true,timeout:120000});done.push(remote.full);}
+  if(delLocal){await this.git(['branch','-D','--',local.name],{audit:true});done.push(`${local.name} (local)`);}
+  return {message:`Apagada: ${done.join(' e ')}.`};
  });}
  async push(){return this.mutate(async()=>{
   const s=await this.status();

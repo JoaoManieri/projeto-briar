@@ -46,3 +46,20 @@ test('abas: vários repositórios abertos ao mesmo tempo, cada pedido no seu, li
   assert.equal((await fetch(base+'/api/state',{headers:h(rb)})).status,404);
  }finally{await new Promise(r=>app.server.close(r));}
  const again=await createApp({port:port+1,configPath});const w=JSON.parse(await readFile(configPath,'utf8'));assert.equal(again.getRepository().root,w.active);});
+test('tags: cria com push, recusa nome repetido, lastTag, push e apaga local/remoto',async()=>{const {root,parent,repo}=await fixture();const origin=path.join(parent,'remote.git');await mkdir(origin);await git(origin,'init','--bare','-b','main');await git(root,'remote','add','origin',origin);await git(root,'push','-u','origin','main');
+ const head=await git(root,'rev-parse','HEAD');
+ await repo.createTag({name:'v1.0.4',sha:head,push:true});assert.match(await git(origin,'tag'),/v1\.0\.4/);
+ await assert.rejects(()=>repo.createTag({name:'v1.0.4',sha:head}),/já existe/);await assert.rejects(()=>repo.createTag({name:'bad name',sha:head}),/inválido/);
+ await new Promise(r=>setTimeout(r,1100));await repo.createTag({name:'v1.0.5',sha:head,message:'Versão 1.0.5'});assert.equal((await repo.status()).lastTag,'v1.0.5');assert.equal(await git(root,'cat-file','-t','v1.0.5'),'tag');assert.doesNotMatch(await git(origin,'tag'),/v1\.0\.5/);
+ await repo.pushTag('v1.0.5');assert.match(await git(origin,'tag'),/v1\.0\.5/);
+ await repo.deleteTag({name:'v1.0.5',remote:true});assert.doesNotMatch(await git(origin,'tag'),/v1\.0\.5/);assert.match(await git(root,'tag'),/v1\.0\.5/);
+ await repo.deleteTag({name:'v1.0.4',local:true,remote:true});assert.doesNotMatch(await git(origin,'tag'),/v1\.0\.4/);assert.doesNotMatch(await git(root,'tag'),/v1\.0\.4/);});
+test('apagar branch: local, remota, as duas; protege a atual e trabalho que só existe nela',async()=>{const {root,parent,repo}=await fixture();const origin=path.join(parent,'remote.git');await mkdir(origin);await git(origin,'init','--bare','-b','main');await git(root,'remote','add','origin',origin);await git(root,'push','-u','origin','main');
+ await assert.rejects(()=>repo.deleteBranch({branch:'main'}),/branch atual/);
+ await git(root,'branch','juntada');await repo.deleteBranch({branch:'juntada'});assert.equal(await git(root,'branch','--list','juntada'),'');
+ await git(root,'switch','-c','feature');await writeFile(path.join(root,'f.txt'),'f\n');await git(root,'add','f.txt');await git(root,'commit','-m','f');await git(root,'push','-u','origin','feature');await git(root,'switch','main');
+ await repo.deleteBranch({branch:'feature',scope:'local'});assert.equal(await git(root,'branch','--list','feature'),'');assert.match(await git(origin,'branch'),/feature/);
+ await assert.rejects(()=>repo.deleteBranch({branch:'origin/feature',scope:'remote'}),/não estão em nenhuma outra branch/);
+ await repo.deleteBranch({branch:'origin/feature',scope:'remote',force:true});assert.doesNotMatch(await git(origin,'branch'),/feature/);assert.equal(await git(root,'branch','-r','--list','origin/feature'),'');
+ await git(root,'switch','-c','both');await git(root,'push','-u','origin','both');await git(root,'switch','main');
+ await repo.deleteBranch({branch:'both',scope:'both'});assert.equal(await git(root,'branch','-a','--list','*both*'),'');assert.doesNotMatch(await git(origin,'branch'),/both/);});
