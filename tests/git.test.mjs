@@ -108,3 +108,27 @@ test('stash: guardar o WIP, listar, ver arquivos, aplicar, pop com e sem conflit
  await writeFile(path.join(root,'README.md'),'y\n');await repo.stashPush({});s=await repo.status();assert.equal(s.stashes.length,1);
  r=await repo.stashApply({sha:s.stashes[0].sha,pop:true});assert.deepEqual(r.conflicts,[]);assert.equal((await repo.status()).stashes.length,0);
 });
+test('fast-forward: avança branch atrasada sem checkout, com WIP, e recusa quando divergiu',async()=>{
+ const {root,parent,repo}=await fixture();
+ await git(root,'branch','atrasada');await git(root,'switch','-q','-c','feature');
+ for(const n of ['1','2']){await writeFile(path.join(root,`f${n}.txt`),n+'\n');await git(root,'add','.');await git(root,'commit','-qm','c'+n);}
+ await writeFile(path.join(root,'README.md'),'wip\n'); // WIP não impede: nada muda nos arquivos
+ let p=await repo.mergePreview({branch:'feature',into:'atrasada'});assert.equal(p.inPlace,true);assert.equal(p.needsCheckout,false);assert.equal(p.incoming,2);
+ let r=await repo.merge({branch:'feature',into:'atrasada'});assert.equal(r.fastForward,true);assert.match(r.message,/avançou 2 commits/);
+ let s=await repo.status();assert.equal(s.branch,'feature');assert.equal(s.branches.find(b=>b.name==='atrasada').sha,s.head);assert.ok(s.files.some(f=>f.path==='README.md'));
+ // branch atual atrás de outra na mesma linha: --ff-only mesmo com WIP
+ await git(root,'switch','-q','main');await repo.merge({branch:'feature'});s=await repo.status();assert.equal(s.head,s.branches.find(b=>b.name==='feature').sha);assert.ok(s.files.some(f=>f.path==='README.md'));
+ // menu: local atrás do upstream
+ const origin=path.join(parent,'remote.git');await mkdir(origin);await git(origin,'init','-q','--bare','-b','main');await git(root,'remote','add','origin',origin);await git(root,'push','-q','-u','origin','main');
+ await git(root,'push','-q','-u','origin','feature');await git(root,'switch','-q','feature');await git(root,'stash','-q');
+ await writeFile(path.join(root,'f3.txt'),'3\n');await git(root,'add','.');await git(root,'commit','-qm','c3');await git(root,'push','-q');await git(root,'switch','-q','main');
+ s=await repo.status();assert.equal(s.branches.find(b=>b.name==='main').behind,0);
+ await git(root,'branch','-f','atrasada','HEAD~1');await git(root,'branch','-q','--set-upstream-to=origin/feature','atrasada');
+ s=await repo.status();const at=s.branches.find(b=>b.name==='atrasada');assert.equal(at.upstream,'origin/feature');assert.ok(at.behind>0);assert.equal(at.ahead,0);
+ r=await repo.fastForward({branch:'atrasada',to:'origin/feature'});assert.match(r.message,/avançou/);
+ s=await repo.status();assert.equal(s.branches.find(b=>b.name==='atrasada').behind,0);assert.equal(s.branch,'main');
+ // divergiu: recusa
+ await writeFile(path.join(root,'m.txt'),'m\n');await git(root,'add','m.txt');await git(root,'commit','-qm','só main');
+ await assert.rejects(()=>repo.fastForward({branch:'main',to:'feature'}),/divergiram/);
+ p=await repo.mergePreview({branch:'main',into:'feature'});assert.ok(!p.inPlace);
+});
