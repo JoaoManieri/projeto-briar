@@ -55,6 +55,8 @@ A atualização automática começou na versão 0.4.0. Quem tem uma versão ante
   - Antes do merge aparece quantos commits entram e quais arquivos vão dar conflito.
   - Se o destino não é a branch atual, o Briar faz o checkout dele antes.
   - Se o destino é remoto, o merge vai para a branch local equivalente. Depois é só dar **Push**.
+  - **Fast-forward:** se o destino só está atrás, na mesma linha, o Briar apenas avança a branch. Quando não é a branch atual, isso acontece sem checkout, e você continua onde está. O WIP não precisa estar limpo nesse caso.
+  - Uma branch local atrás do remoto mostra ↓N na lateral. O botão ⏩ (ou **Fast-forward até origin/…** no botão direito) a atualiza sem trocar de branch.
 - **Conflitos visíveis até alguém resolver.**
   - Uma faixa vermelha fica no topo e a branch aparece como **CONFLITO**. Isso continua mesmo depois de fechar e abrir o app, porque é o estado do próprio Git.
   - Cada arquivo abre num editor por trecho, com *sua versão* e *recebida* lado a lado e os botões *Usar a minha*, *Usar a recebida* ou *As duas*.

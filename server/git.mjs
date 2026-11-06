@@ -24,7 +24,7 @@ export class GitRepository {
  mutate(fn){const result=this.tail.then(fn);this.tail=result.catch(()=>{});return result;}
  async head(){return (await this.git(['rev-parse','--verify','HEAD'],{allow:[0,128]})).trim()||null;}
  async files(){const raw=await this.git(['status','--porcelain=v1','-z','--untracked-files=all']);const parts=raw.split('\0');const files=[];for(let i=0;i<parts.length;i++){const v=parts[i];if(!v)continue;const index=v[0],worktree=v[1],name=v.slice(3);let oldPath;if(index==='R'||index==='C'||worktree==='R'||worktree==='C')oldPath=parts[++i];files.push({path:name,oldPath,index,worktree,untracked:index==='?'&&worktree==='?',conflicted:['DD','AU','UD','UA','DU','AA','UU'].includes(index+worktree),staged:index!==' '&&index!=='?',unstaged:worktree!==' '||index==='?'});}return files;}
- async refs(){const raw=await this.git(['for-each-ref','--format=%(refname)%00%(objectname)%00%(*objectname)','refs/heads/','refs/remotes/','refs/tags/']);const branches=[],tags=[];for(const row of raw.split('\n')){if(!row)continue;const [ref,sha,peeled]=row.split('\0');if(ref.endsWith('/HEAD'))continue;if(ref.startsWith('refs/tags/'))tags.push({name:ref.slice(10),sha:peeled||sha});else branches.push({name:ref.replace(/^refs\/(heads|remotes)\//,''),sha,remote:ref.startsWith('refs/remotes/')});}return {branches,tags};}
+ async refs(){const raw=await this.git(['for-each-ref','--format=%(refname)%00%(objectname)%00%(*objectname)%00%(upstream:short)%00%(upstream:track,nobracket)','refs/heads/','refs/remotes/','refs/tags/']);const branches=[],tags=[];for(const row of raw.split('\n')){if(!row)continue;const [ref,sha,peeled,upstream,track='']=row.split('\0');if(ref.endsWith('/HEAD'))continue;if(ref.startsWith('refs/tags/'))tags.push({name:ref.slice(10),sha:peeled||sha});else if(ref.startsWith('refs/remotes/'))branches.push({name:ref.slice(13),sha,remote:true});else branches.push({name:ref.slice(11),sha,remote:false,upstream:upstream&&track!=='gone'?upstream:null,ahead:Number(/ahead (\d+)/.exec(track)?.[1]||0),behind:Number(/behind (\d+)/.exec(track)?.[1]||0)});}return {branches,tags};}
  async indexFingerprint(){return createHash('sha256').update(await this.git(['ls-files','--stage','-z'])).digest('hex');}
  async status(){
   const [files,branch,head,refs,indexFingerprint,remotes]=await Promise.all([this.files(),this.git(['branch','--show-current']),this.head(),this.refs(),this.indexFingerprint(),this.git(['remote'])]);
@@ -264,12 +264,28 @@ export class GitRepository {
   const ref=exists&&!(await this.isAncestor(localRef,'refs/remotes/'+t.name))?localRef:'refs/remotes/'+t.name;
   return {name:local,ref,needsCheckout:local!==s.branch,remote:true};
  }
+ // Fast-forward "no lugar": o destino é uma branch local que não é a atual e está atrás do que vem,
+ // na mesma linha. Basta mover o ponteiro, sem checkout e sem mexer nos arquivos do WIP.
+ async ffInPlace(s,dest,sha){
+  if(!dest.name||dest.name===s.branch)return null;
+  const local=s.branches.find(b=>!b.remote&&b.name===dest.name);
+  if(!local||local.sha===sha)return null;
+  return await this.isAncestor(local.sha,sha)?local:null;
+ }
+ async moveBranch(local,sha,label){
+  const n=Number((await this.git(['rev-list','--count',`${local.sha}..${sha}`])).trim());
+  // update-ref com o valor antigo: se a branch mudou nesse meio-tempo, o Git recusa em vez de perder commits.
+  await this.git(['update-ref','-m',`Briar: fast-forward até ${label}`,'refs/heads/'+local.name,sha,local.sha],{audit:true});
+  return `${local.name} avançou ${n} ${n===1?'commit':'commits'} até ${label} (fast-forward).`;
+ }
  async mergePreview({branch,into}={}){
   const {s,target}=await this.resolveRef(branch);
   if(!s.head)throw new GitError('Não há commits nesta branch.');
   const dest=await this.mergeDestination(s,into);
   if(!dest.name)throw new GitError('Selecione uma branch (não HEAD destacado) como destino.');
   if(!target.remote&&target.name===dest.name)throw new GitError(`${target.name} já é o destino. Para levar ${target.name} ao remoto, use Push.`);
+  const ff=await this.ffInPlace(s,dest,target.sha);
+  if(ff){const n=Number((await this.git(['rev-list','--count',`${ff.sha}..${target.sha}`])).trim());return {branch:target.name,current:s.branch,into:dest.name,needsCheckout:false,intoRemote:dest.remote,incoming:n,fastForward:true,inPlace:true,conflicts:[]};}
   const incoming=(await this.git(['rev-list','--count',`${dest.ref}..${target.sha}`])).trim();
   const fastForward=await this.isAncestor(dest.ref,target.sha);
   let conflicts=[];
@@ -282,13 +298,31 @@ export class GitRepository {
  async merge({branch,into}={}){return this.mutate(async()=>{
   let {s,target,ref}=await this.resolveRef(branch);
   if(s.merging)throw new GitError('Já existe um merge em andamento. Conclua ou aborte primeiro.',409);
-  if(s.files.some(f=>!f.untracked))throw new GitError('Faça commit das alterações locais antes do merge.',409);
   const dest=await this.mergeDestination(s,into);
   if(!dest.name)throw new GitError('Selecione uma branch (não HEAD destacado) antes do merge.');
   if(!target.remote&&target.name===dest.name)throw new GitError('Não é possível fazer merge de uma branch nela mesma.');
+  const ff=await this.ffInPlace(s,dest,target.sha);
+  if(ff){const message=await this.moveBranch(ff,target.sha,target.name);return {output:'',conflicts:[],into:dest.name,fastForward:true,message:message+` Você continua em ${s.branch||'HEAD'}.`};}
+  // Branch atual atrás, na mesma linha: --ff-only funciona com WIP (o Git só recusa se for sobrescrever algum arquivo).
+  if(dest.name===s.branch&&await this.isAncestor('HEAD',target.sha)){const output=await this.git(['merge','--ff-only',ref],{audit:true,timeout:60000});return {output,conflicts:[],into:dest.name,fastForward:true};}
+  if(s.files.some(f=>!f.untracked))throw new GitError('Faça commit das alterações locais antes do merge.',409);
   if(dest.needsCheckout||dest.remote){await this.switchUnlocked(into);({s,target,ref}=await this.resolveRef(branch));}
   try{const output=await this.git(['merge','--no-edit',ref],{audit:true,timeout:60000});return {output,conflicts:[],into:dest.name};}
   catch(e){const conflicts=(await this.files()).filter(f=>f.conflicted).map(f=>f.path);if(conflicts.length)return {output:e.message,conflicts,into:dest.name};throw e;}
+ });}
+ async fastForward({branch,to}={}){return this.mutate(async()=>{
+  const s=await this.status();
+  const local=s.branches.find(b=>!b.remote&&b.name===branch);if(!local)throw new GitError('Branch local não encontrada.');
+  const target=s.branches.find(b=>b.name===to);if(!target)throw new GitError('Referência de destino não encontrada.');
+  if(local.sha===target.sha)return {message:`${branch} já está em ${to}.`};
+  if(!await this.isAncestor(local.sha,target.sha))throw new GitError(`${branch} e ${to} divergiram: não dá fast-forward. Faça merge.`,409);
+  if(branch===s.branch){
+   if(s.merging)throw new GitError('Conclua ou aborte o merge em andamento primeiro.',409);
+   const n=Number((await this.git(['rev-list','--count',`HEAD..${target.sha}`])).trim());
+   await this.git(['merge','--ff-only',target.sha],{audit:true,timeout:60000});
+   return {message:`${branch} avançou ${n} ${n===1?'commit':'commits'} até ${to} (fast-forward).`};
+  }
+  return {message:await this.moveBranch(local,target.sha,to)};
  });}
  async abortMerge(){return this.mutate(async()=>{
   if(!await this.mergeState())throw new GitError('Não há merge em andamento.');
