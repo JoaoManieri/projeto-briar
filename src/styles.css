@@ -54,7 +54,8 @@ button.crumb:hover:not(:disabled),.crumb:has(select:hover){background:var(--bg-4
 .body{flex:1;display:flex;min-height:0}
 .sidebar{width:230px;flex-shrink:0;background:var(--bg-2);border-right:1px solid #00000055;display:flex;flex-direction:column;min-height:0}
 .center{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg)}
-.panel{width:360px;flex-shrink:0;background:var(--bg-2);border-left:1px solid #00000055;overflow:auto}
+.panel{width:360px;flex-shrink:0;background:var(--bg-2);border-left:1px solid #00000055;overflow:auto;display:flex;flex-direction:column}
+.panel>*{flex-shrink:0}
 
 /* sidebar */
 .side-filter{display:flex;align-items:center;gap:6px;margin:8px;padding:5px 8px;background:var(--bg);border-radius:5px;color:var(--muted);border:1px solid var(--line)}
@@ -176,6 +177,12 @@ kbd{font-size:10px;border:1px solid var(--line-2);border-radius:3px;padding:0 4p
 .numstat{font-size:11px;display:flex;gap:6px;font-family:'JetBrains Mono',Consolas,monospace}
 .files-empty{margin:4px 14px 6px;color:var(--dim);font-size:12px}
 .commit-box{display:flex;flex-direction:column;gap:7px;padding:12px 14px}
+/* WIP: só a lista de arquivos rola; o título e a caixa de commit ficam fixos */
+.panel>.wip-panel{flex:1 1 0;min-height:0}
+.wip-files{flex:1 1 auto;min-height:0;overflow:auto}
+.wip-panel>.panel-title,.wip-panel>.commit-box{flex-shrink:0}
+.wip-panel>.commit-box{border-top:1px solid var(--line-2);background:var(--bg-2);box-shadow:0 -8px 14px -10px #000c}
+.wip-panel .commit-box textarea{max-height:32vh}
 .commit-box input,.commit-box textarea,.field input:not([type=radio]):not([type=checkbox]),.field select{width:100%;background:var(--bg);border:1px solid var(--line-2);border-radius:5px;padding:7px 9px;outline:none;resize:vertical}
 .commit-box input:focus,.commit-box textarea:focus,.field input:focus,.field select:focus{border-color:var(--accent)}
 .commit-head{padding:14px;border-bottom:1px solid var(--line)}
