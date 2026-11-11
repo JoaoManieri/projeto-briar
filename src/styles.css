@@ -242,7 +242,7 @@ kbd{font-size:10px;border:1px solid var(--line-2);border-radius:3px;padding:0 4p
 .error-toast+.toast{bottom:84px}
 
 /* welcome */
-.welcome{min-height:100vh;display:grid;place-items:center;padding:20px}
+.welcome{min-height:100vh;display:grid;grid-template-columns:minmax(0,1fr);place-items:center;padding:20px}
 .welcome-card{width:min(440px,100%);background:var(--bg-3);border:1px solid var(--line-2);border-radius:10px;padding:24px}
 .welcome-card .brand{width:auto;padding:0;border:0;height:auto;margin-bottom:18px}
 .welcome-card h1{font-size:19px;margin:0 0 14px}
