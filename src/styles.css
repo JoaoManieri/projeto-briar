@@ -419,6 +419,7 @@ kbd{font-size:10px;border:1px solid var(--line-2);border-radius:3px;padding:0 4p
 .clone{display:flex;flex-direction:column;gap:2px}
 .clone>.seg{align-self:flex-start;margin-bottom:12px}
 .input-row{display:flex;gap:6px;align-items:center}
+.field>.input-row{font-size:inherit;font-weight:inherit;color:inherit;text-transform:none;letter-spacing:normal}
 .input-row input{flex:1;min-width:0}
 .clone-grid{display:grid;grid-template-columns:1fr 200px;gap:0 10px}
 .clone-protocol{display:flex;align-items:center;gap:14px;font-size:12px;color:var(--muted);margin:-4px 0 0}
