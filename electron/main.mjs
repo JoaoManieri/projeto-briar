@@ -1,6 +1,6 @@
 // Briar como aplicativo de desktop: sobe o servidor Git local (server/index.mjs) numa porta livre
 // de 127.0.0.1 e abre a interface numa janela do Electron.
-import {app,BrowserWindow,dialog,ipcMain,shell} from 'electron';
+import {app,BrowserWindow,dialog,ipcMain,safeStorage,shell} from 'electron';
 import net from 'node:net';
 import path from 'node:path';
 import {writeFileSync} from 'node:fs';
@@ -19,6 +19,14 @@ function freePort(preferred){
   });
 }
 
+// Cofre do sistema (Keychain, DPAPI, libsecret/KWallet) para o token do GitHub. No Linux sem chaveiro o
+// Electron cai num modo que só embaralha o texto: aí o token não é salvo e vale só até fechar o Briar.
+const secrets={
+  available:()=>safeStorage.isEncryptionAvailable()&&safeStorage.getSelectedStorageBackend?.()!=='basic_text',
+  encrypt:text=>safeStorage.encryptString(text).toString('base64'),
+  decrypt:data=>safeStorage.decryptString(Buffer.from(data,'base64')),
+};
+
 let win=null;
 async function start(){
   const port=await freePort(4317);
@@ -27,6 +35,7 @@ async function start(){
     repoPath:process.env.BRIAR_REPO||undefined,
     configPath:path.join(app.getPath('userData'),'settings.json'),
     distPath:path.join(root,'dist'),
+    secrets,
   });
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});
   app.on('before-quit',()=>server.close());
@@ -57,8 +66,10 @@ async function devScreenshot(){
   app.quit();
 }
 
-ipcMain.handle('briar:pick-folder',async()=>{
-  const r=await dialog.showOpenDialog(win,{title:'Escolher o clone Git',properties:['openDirectory']});
+ipcMain.handle('briar:pick-folder',async(_event,options)=>{
+  const title=typeof options?.title==='string'?options.title.slice(0,200):'Escolher o clone Git';
+  const defaultPath=typeof options?.defaultPath==='string'?options.defaultPath:undefined;
+  const r=await dialog.showOpenDialog(win,{title,defaultPath,properties:['openDirectory','createDirectory']});
   return r.canceled?null:r.filePaths[0]||null;
 });
 

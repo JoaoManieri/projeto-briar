@@ -132,3 +132,33 @@ test('fast-forward: avança branch atrasada sem checkout, com WIP, e recusa quan
  await assert.rejects(()=>repo.fastForward({branch:'main',to:'feature'}),/divergiram/);
  p=await repo.mergePreview({branch:'main',into:'feature'});assert.ok(!p.inPlace);
 });
+test('clonar: valida a URL, mostra o andamento e abre o clone numa aba nova',async()=>{
+ const {parseCloneUrl,repoName}=await import('../server/clone.mjs');
+ for(const bad of ['','ext::sh -c touch NUNCA','fd::3','-uploadpack=touch NUNCA','github.com:dono/projeto','http://sem-caminho','https://github.com/a b'])assert.throws(()=>parseCloneUrl(bad));
+ assert.equal(parseCloneUrl(' git@github.com:dono/projeto.git '),'git@github.com:dono/projeto.git');
+ assert.equal(repoName('https://github.com/dono/projeto-x.git/'),'projeto-x');assert.equal(repoName('git@github.com:dono/outro.git'),'outro');
+ const {root,parent}=await fixture();const origin=path.join(parent,'origem.git');await git(parent,'clone','-q','--bare',root,origin);
+ const dest=await mkdtemp(path.join(os.tmpdir(),'briar-clone-'));const port=14319;
+ const app=await createApp({port,persist:false});await new Promise(r=>app.server.listen(port,'127.0.0.1',r));
+ const base=`http://127.0.0.1:${port}`;const headers={'X-Pindorama-Client':'local','Content-Type':'application/json','Origin':base};
+ const post=async(route,body)=>{const r=await fetch(base+'/api/'+route,{method:'POST',headers,body:JSON.stringify(body)});return {status:r.status,data:await r.json()};};
+ const get=async route=>(await fetch(base+'/api/'+route,{headers})).json();
+ try{
+  assert.equal((await post('clone/start',{url:'ext::sh -c "touch NUNCA"',parent:dest})).status,400);
+  assert.equal((await post('clone/start',{url:origin,parent:path.join(dest,'nao-existe')})).status,400);
+  assert.equal((await post('clone/start',{url:origin,parent:dest,name:'../fora'})).status,400);
+  const started=await post('clone/start',{url:origin,parent:dest});assert.equal(started.status,200);assert.equal(started.data.dest,path.join(dest,'origem'));
+  let job=started.data;for(let i=0;i<100&&job.running;i++){await new Promise(r=>setTimeout(r,100));job=await get('clone?id='+job.id);}
+  assert.equal(job.error,null);assert.equal(job.done,true);
+  const cloned=await realpath(path.join(dest,'origem'));assert.equal(job.root,cloned);
+  assert.equal(await readFile(path.join(cloned,'README.md'),'utf8'),'initial\n');
+  const ws=await get('workspace');assert.equal(ws.active,cloned);assert.ok(ws.tabs.some(t=>t.root===cloned));assert.equal(ws.cloneDir,dest);
+  const again=await post('clone/start',{url:origin,parent:dest});assert.equal(again.status,409);assert.match(again.data.error,/Já existe/);
+  const other=await post('clone/start',{url:origin,parent:dest,name:'outro-nome'});assert.equal(other.status,200);
+  job=other.data;for(let i=0;i<100&&job.running;i++){await new Promise(r=>setTimeout(r,100));job=await get('clone?id='+job.id);}
+  assert.equal(job.done,true);
+  const missing=await post('clone/start',{url:path.join(parent,'nao-e-repo'),parent:dest,name:'falha'});
+  job=missing.data;for(let i=0;i<100&&job.running;i++){await new Promise(r=>setTimeout(r,100));job=await get('clone?id='+job.id);}
+  assert.equal(job.done,false);assert.match(job.error,/não encontrado|falhou/);
+ }finally{await new Promise(r=>app.server.close(r));}
+});
