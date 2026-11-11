@@ -1,6 +1,10 @@
 # Briar — cliente Git do time
 
-Cliente Git de desktop no estilo GitKraken, feito para o time da Hipona Studios. Roda no seu computador, sobre o seu clone local, usando o Git instalado na máquina.
+🇺🇸 [English](README.md)
+
+Cliente Git de desktop gratuito e de código aberto, feito para o time da Hipona Studios. Roda no seu computador, sobre o seu clone local, usando o Git instalado na máquina.
+
+![Briar com o grafo do Pindorama](docs/images/hero.png)
 
 ## Baixar
 
@@ -25,6 +29,8 @@ Instale o **Git** ([git-scm.com/downloads](https://git-scm.com/downloads)). Para
 
 Ao abrir, clique em **Escolher pasta…** e selecione o seu clone, por exemplo `~/Projetos/projeto-pindorama`. O caminho fica salvo, e as abas abertas voltam na próxima vez.
 
+Ainda não tem o projeto no computador? Use **Clonar** na mesma tela (veja abaixo).
+
 ### Atualizar
 
 O Briar procura versão nova ao abrir e depois a cada 4 horas. Para procurar na hora, clique na versão (**Briar 0.x.y**) no canto inferior direito.
@@ -36,11 +42,18 @@ A atualização automática começou na versão 0.4.0. Quem tem uma versão ante
 
 ## O que ele faz
 
-- **Vários repositórios em abas**, como no GitKraken.
+- **Vários repositórios em abas.**
   - O **+** (ou <kbd>Ctrl</kbd>+<kbd>T</kbd>) mostra os repositórios salvos e permite abrir outro clone. Clicar no nome do repositório na barra de ferramentas faz o mesmo.
   - Cada aba tem o próprio estado. Um push numa aba não trava as outras.
   - A aba mostra a branch atual, um ponto quando há alterações não commitadas e um aviso quando há merge em andamento.
   - <kbd>Ctrl</kbd>+<kbd>Tab</kbd> troca de aba. O botão do meio do mouse fecha a aba.
+- **Clonar repositório.** No **+** (ou <kbd>Ctrl</kbd>+<kbd>T</kbd>), escolha **Clonar**.
+  - **URL:** cole o endereço (`https://…`, `git@github.com:…` ou um caminho local), escolha a pasta e o nome. O comando aparece antes, e o andamento (fase, %, velocidade) aparece durante, com **Cancelar**.
+  - **GitHub:** conecte a conta e escolha na lista os seus repositórios, os das organizações e aqueles em que você colabora, com filtro. Dá para escolher SSH ou HTTPS; o padrão segue o que o GitHub CLI usa.
+  - Para conectar, o Briar usa o login do **GitHub CLI** (`gh auth login`), se ele estiver instalado, ou um **token de acesso pessoal** com o escopo `repo` ([criar token](https://github.com/settings/tokens/new?description=Briar&scopes=repo)). O token fica cifrado pelo cofre do sistema; sem cofre, vale só até fechar o Briar. Ele é usado só para listar e para o clone HTTPS do github.com, e nunca vai para a URL do remoto nem para o `.git/config`.
+  - Quando termina, o clone abre numa aba nova. Dá para voltar às outras abas enquanto ele roda: o **+** fica girando.
+
+  ![Tela de clone](docs/images/clone.png)
 - **Descartar alterações (lixeira vermelha no WIP).**
   - Em cada arquivo, ou em **Descartar** no topo de Unstaged para todos de uma vez. Sempre pede confirmação.
   - O arquivo volta a ficar como no último commit: arquivos apagados voltam e arquivos novos somem.
@@ -52,6 +65,9 @@ A atualização automática começou na versão 0.4.0. Quem tem uma versão ante
   - Se aplicar der conflito, os arquivos vão para "Conflitos" no WIP e o stash continua guardado.
 - **Checkout com duplo clique.** Numa branch remota cuja local já existe (ex.: `origin/main` com `main`), o Briar troca para a local e a atualiza até o remoto quando possível. Se elas divergiram, ele avisa para fazer merge.
 - **Arrastar para fazer merge.** Arraste uma branch sobre outra: na lateral, num rótulo do grafo ou no seletor de branch do topo.
+
+  ![Prévia do merge com conflitos previstos](docs/images/merge-preview.png)
+
   - Antes do merge aparece quantos commits entram e quais arquivos vão dar conflito.
   - Se o destino não é a branch atual, o Briar faz o checkout dele antes.
   - Se o destino é remoto, o merge vai para a branch local equivalente. Depois é só dar **Push**.
@@ -61,6 +77,8 @@ A atualização automática começou na versão 0.4.0. Quem tem uma versão ante
   - Uma faixa vermelha fica no topo e a branch aparece como **CONFLITO**. Isso continua mesmo depois de fechar e abrir o app, porque é o estado do próprio Git.
   - Cada arquivo abre num editor por trecho, com *sua versão* e *recebida* lado a lado e os botões *Usar a minha*, *Usar a recebida* ou *As duas*.
   - Depois, **Concluir merge** ou **Abortar**.
+
+  ![Editor de conflitos](docs/images/conflict-editor.png)
 - **Botão direito em branches, tags e commits** (na lateral, no grafo e na lista "+N").
   - **Branch:** checkout, merge na atual, criar tag ali, apagar a local, apagar no remoto ou as duas.
     - A branch atual não pode ser apagada.
@@ -71,13 +89,13 @@ A atualização automática começou na versão 0.4.0. Quem tem uma versão ante
     - A caixa "Enviar a tag (push)" vem marcada.
   - **Tag:** push para o remoto, localizar no grafo, apagar local, apagar no remoto ou nos dois.
   - **Commit:** criar tag ou branch ali, copiar o hash.
-- **Grafo** no estilo GitKraken, com a branch atual sempre na primeira coluna.
+- **Grafo** colorido, uma faixa por linha de desenvolvimento, com a branch atual sempre na primeira coluna.
   - Quando um commit tem várias branches, aparece **+N**. Ao passar o mouse abre a lista delas: clique numa para fazer checkout, ou arraste para fazer merge.
-- **// WIP:** a linha no topo mostra os arquivos ainda não commitados. No painel direito ficam Stage/Unstage, diff e commit.
+- **// WIP:** a linha no topo mostra os arquivos ainda não commitados. No painel direito ficam Stage/Unstage, diff e commit. Só a lista de arquivos rola: o resumo, a descrição e o botão de commit ficam sempre visíveis.
 - **Pull** (fast-forward ou com merge), **Push** (cria o upstream na primeira vez, nunca faz force push), **Fetch** e **Branch**.
 - Histórico das operações Git da sessão (ícone de terminal).
 
-Não há rebase, reset hard nem force push. A troca de branch é bloqueada quando há alterações em arquivos rastreados (arquivos novos não atrapalham). A autenticação usa a configuração de Git/SSH já existente: o Briar nunca pede senha ou token.
+Não há rebase, reset hard nem force push. A troca de branch é bloqueada quando há alterações em arquivos rastreados (arquivos novos não atrapalham). Push, pull e fetch usam a configuração de Git/SSH já existente: o Briar nunca pede senha. O token do GitHub é opcional e só serve para listar e clonar repositórios.
 
 Cada pessoa usa o Briar no próprio computador, com o próprio clone. O time continua se comunicando pelo remoto Git (push/pull).
 
@@ -97,7 +115,7 @@ No modo navegador dá para indicar o clone ao iniciar: `npm run dev -- --repo ~/
 Estrutura:
 
 - `src/`: interface (React).
-- `server/`: operações Git, chamando o `git` do sistema.
+- `server/`: operações Git, chamando o `git` do sistema (`git.mjs`), clone (`clone.mjs`) e conta do GitHub (`github.mjs`).
 - `electron/`: janela do aplicativo.
 - `tests/`: testes da camada Git.
 
