@@ -278,6 +278,8 @@ kbd{font-size:10px;border:1px solid var(--line-2);border-radius:3px;padding:0 4p
 
 /* editor de conflitos por trecho */
 .cedit{flex:1;overflow:auto;padding:12px 16px 16px;display:flex;flex-direction:column;gap:8px}
+/* Os blocos não encolhem: com overflow:hidden, o .cblock virava a única coisa espremida num arquivo longo. */
+.cedit>*{flex-shrink:0}
 .cctx{margin:0;padding:6px 12px;font-size:12px;line-height:1.5;color:#9aa5b2;background:var(--bg-2);border-radius:5px;white-space:pre-wrap;word-break:break-word}
 .cfold{color:var(--dim);font-style:italic}
 .cblock{border:1px solid #e5675f88;border-radius:6px;overflow:hidden;background:var(--bg-2)}
