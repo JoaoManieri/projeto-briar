@@ -5,6 +5,7 @@ import {
   RefreshCw,Search,Send,Sprout,Tag,Terminal,Trash2,TriangleAlert,Undo2,X
 } from 'lucide-react';
 import {ancestors,layoutGraph,palette,type History,type Commit} from './history';
+import {api} from './api';
 
 type FileState={path:string;oldPath?:string;index:string;worktree:string;staged:boolean;unstaged:boolean;untracked:boolean;conflicted:boolean};
 type BranchRef={name:string;sha:string;remote:boolean;upstream?:string|null;ahead?:number;behind?:number};
@@ -77,12 +78,6 @@ function ConflictEditor({text,ours,theirs,busy,onSave}:{text:string;ours:string;
   </div>;
 }
 
-async function api(route:string,body?:unknown,signal?:AbortSignal,repo?:string){
-  const r=await fetch('/api/'+route,{method:body===undefined?'GET':'POST',headers:{'X-Pindorama-Client':'local',...(repo?{'X-Briar-Repo':encodeURIComponent(repo)}:{}),...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)}),signal});
-  const data=await r.json();
-  if(!r.ok)throw new Error(data.error||'O servidor Git não respondeu.');
-  return data;
-}
 const tz=Intl.DateTimeFormat().resolvedOptions().timeZone;
 const fmt=(d:string,full=false)=>new Intl.DateTimeFormat('pt-BR',{day:'2-digit',month:'short',...(full?{year:'numeric',hour:'2-digit',minute:'2-digit'}:{}),timeZone:tz}).format(new Date(d));
 const color=(n:number)=>palette[n%palette.length];
