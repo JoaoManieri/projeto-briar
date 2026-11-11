@@ -1,7 +1,7 @@
 const {contextBridge,ipcRenderer}=require('electron');
 contextBridge.exposeInMainWorld('briar',{
   desktop:true,
-  pickFolder:()=>ipcRenderer.invoke('briar:pick-folder'),
+  pickFolder:options=>ipcRenderer.invoke('briar:pick-folder',options),
   update:{
     state:()=>ipcRenderer.invoke('briar:update-state'),
     check:()=>ipcRenderer.invoke('briar:update-check'),
