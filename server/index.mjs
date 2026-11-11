@@ -6,11 +6,14 @@ import {existsSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {GitRepository,GitError} from './git.mjs';
 import {CloneJobs} from './clone.mjs';
+import {ghCliToken,ghCliProtocol,githubUser,githubRepos,validToken} from './github.mjs';
 const project=path.resolve(fileURLToPath(new URL('../',import.meta.url)));
 // Vários repositórios abertos ao mesmo tempo (abas). Cada pedido da interface diz qual aba é
 // pelo cabeçalho X-Briar-Repo; sem ele, vale a aba ativa.
-// settings.json: {tabs:[caminhos abertos], active:caminho, recent:[caminhos já usados], cloneDir, cloneProtocol}.
-export async function createApp({repoPath=process.env.PINDORAMA_REPO,port=4317,persist=true,configPath,distPath}={}){
+// settings.json: {tabs:[caminhos abertos], active:caminho, recent:[caminhos já usados], cloneDir, cloneProtocol, github}.
+// secrets (opcional, vem do Electron): cifra o token do GitHub com o cofre do sistema. Sem ele, o token
+// colado vale só até fechar o Briar.
+export async function createApp({repoPath=process.env.PINDORAMA_REPO,port=4317,persist=true,configPath,distPath,secrets}={}){
  const config=configPath||path.join(project,'.pindorama','settings.json');
  const open=new Map();let active=null,recent=[],initialError='';
  let saved={};
@@ -21,13 +24,30 @@ export async function createApp({repoPath=process.env.PINDORAMA_REPO,port=4317,p
  active=open.has(saved.active)?saved.active:[...open.keys()][0]||null;
  const remember=root=>{recent=[root,...recent.filter(p=>p!==root)].slice(0,30);};
  for(const root of open.keys())remember(root);
- // Clone
+ // Clone e GitHub
  const clones=new CloneJobs();
  let cloneDir=typeof saved.cloneDir==='string'?saved.cloneDir:null,cloneProtocol=['ssh','https'].includes(saved.cloneProtocol)?saved.cloneProtocol:null;
+ let github=saved.github?.source==='gh'?{source:'gh'}:saved.github?.source==='token'&&typeof saved.github.token==='string'?{source:'token',token:saved.github.token}:null;
+ let sessionToken=null;const ghCache={token:null,user:null,repos:null,at:0};
+ const canStore=()=>{try{return !!secrets?.available();}catch{return false;}};
  // Pasta sugerida para clonar: a última usada, senão a pasta do último repositório aberto, senão ~/Projetos.
  const defaultCloneDir=()=>{if(cloneDir&&existsSync(cloneDir))return cloneDir;const last=recent[0]&&path.dirname(recent[0]);if(last&&existsSync(last))return last;for(const d of ['Projetos','Projects','projects']){const p=path.join(homedir(),d);if(existsSync(p))return p;}return homedir();};
- async function save(){if(!persist)return;await mkdir(path.dirname(config),{recursive:true});await writeFile(config,JSON.stringify({tabs:[...open.keys()],active,recent,cloneDir,cloneProtocol},null,2),{mode:0o600});}
+ async function save(){if(!persist)return;await mkdir(path.dirname(config),{recursive:true});await writeFile(config,JSON.stringify({tabs:[...open.keys()],active,recent,cloneDir,cloneProtocol,github:github?.source==='gh'?{source:'gh'}:github?.token?{source:'token',token:github.token}:undefined},null,2),{mode:0o600});}
  const workspace=()=>({tabs:[...open.values()].map(r=>({root:r.root,name:path.basename(r.root)})),active,recent:recent.map(root=>({root,name:path.basename(root),open:open.has(root)})),cloneDir:defaultCloneDir(),initialError});
+ async function githubToken(){
+  if(github?.source==='gh')return ghCliToken();
+  if(github?.source==='token'){if(sessionToken)return sessionToken;if(github.token&&canStore()){try{return sessionToken=secrets.decrypt(github.token);}catch{return null;}}}
+  return null;
+ }
+ async function githubUserFor(token){if(ghCache.token!==token)Object.assign(ghCache,{token,user:null,repos:null,at:0});if(!ghCache.user)ghCache.user=await githubUser(token);return ghCache.user;}
+ async function githubStatus(){
+  const [cli,cliProtocol]=await Promise.all([ghCliToken(),ghCliProtocol()]);
+  const base={gh:!!cli,canStore:canStore(),protocol:cloneProtocol||cliProtocol||'https',source:github?.source||null,connected:false,user:null};
+  if(!github)return base;
+  const token=github.source==='gh'?cli:await githubToken();
+  if(!token)return {...base,error:github.source==='gh'?'O GitHub CLI não está mais logado. Rode gh auth login no terminal ou conecte com um token.':'O token salvo não pôde ser lido. Conecte de novo.'};
+  try{return {...base,connected:true,user:await githubUserFor(token)};}catch(e){return {...base,error:e.message};}
+ }
  const allowedHosts=new Set([`127.0.0.1:${port}`,`localhost:${port}`,'127.0.0.1:5173','localhost:5173']);
  const origins=new Set([...allowedHosts].map(h=>'http://'+h));
  const send=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data));};
@@ -46,6 +66,13 @@ export async function createApp({repoPath=process.env.PINDORAMA_REPO,port=4317,p
     const repo=key?open.get(key):null;
     if(url.pathname==='/api/workspace'&&req.method==='GET')return send(res,200,workspace());
     if(url.pathname==='/api/clone'&&req.method==='GET')return send(res,200,clones.get(url.searchParams.get('id')));
+    if(url.pathname==='/api/github'&&req.method==='GET')return send(res,200,await githubStatus());
+    if(url.pathname==='/api/github/repos'&&req.method==='GET'){
+     const token=await githubToken();if(!token)throw new GitError('Conecte o GitHub primeiro.',401);
+     await githubUserFor(token);
+     if(!ghCache.repos||url.searchParams.has('refresh')||Date.now()-ghCache.at>60000){ghCache.repos=await githubRepos(token);ghCache.at=Date.now();}
+     return send(res,200,{repos:ghCache.repos});
+    }
     if(url.pathname==='/api/state'&&req.method==='GET'){
      if(!repo)return send(res,key?404:200,key?{error:'Essa aba não está mais aberta.'}:{status:null,history:null,initialError});
      return send(res,200,{status:await repo.status(),history:await repo.history(),initialError:''});
@@ -70,11 +97,19 @@ export async function createApp({repoPath=process.env.PINDORAMA_REPO,port=4317,p
     // clone abre numa aba nova.
     if(url.pathname==='/api/clone/start'){
      if(['ssh','https'].includes(input.protocol))cloneProtocol=input.protocol;
-     const job=await clones.start({url:input.url,parent:input.parent,name:input.name},async dest=>{const r=await GitRepository.open(dest);if(!open.has(r.root))open.set(r.root,r);active=r.root;remember(r.root);initialError='';await save();return r.root;});
+     const token=/^https:\/\/github\.com\//i.test(String(input.url||'').trim())?await githubToken().catch(()=>null):null;
+     const job=await clones.start({url:input.url,parent:input.parent,name:input.name,token},async dest=>{const r=await GitRepository.open(dest);if(!open.has(r.root))open.set(r.root,r);active=r.root;remember(r.root);initialError='';await save();return r.root;});
      cloneDir=path.dirname(job.dest);await save();
      return send(res,200,job);
     }
     if(url.pathname==='/api/clone/cancel')return send(res,200,clones.cancel(input.id));
+    if(url.pathname==='/api/github/connect'){
+     if(input.source==='gh'){const token=await ghCliToken();if(!token)throw new GitError('O GitHub CLI não está instalado ou não está logado. Rode gh auth login no terminal, ou conecte com um token.');await githubUserFor(token);github={source:'gh'};sessionToken=null;}
+     else if(input.source==='token'){const token=String(input.token||'').trim();if(!validToken(token))throw new GitError('Esse token não parece válido. Copie de novo o token gerado no GitHub.');await githubUserFor(token);sessionToken=token;github={source:'token',token:canStore()?secrets.encrypt(token):null};}
+     else throw new GitError('Forma de conexão inválida.');
+     await save();return send(res,200,await githubStatus());
+    }
+    if(url.pathname==='/api/github/disconnect'){github=null;sessionToken=null;Object.assign(ghCache,{token:null,user:null,repos:null,at:0});await save();return send(res,200,await githubStatus());}
     if(!repo)throw new GitError(key?'Essa aba não está mais aberta.':'Abra um clone local primeiro.',key?404:400);
     if(url.pathname==='/api/diff')return send(res,200,{diff:await repo.diff(input)});
     if(url.pathname==='/api/stash-files')return send(res,200,await repo.stashFiles(input.sha));
