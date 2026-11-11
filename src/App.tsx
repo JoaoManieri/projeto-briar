@@ -1,11 +1,12 @@
 import {useCallback,useEffect,useMemo,useRef,useState,type CSSProperties,type ReactNode} from 'react';
 import {
-  Archive,ArchiveRestore,FastForward,ArrowDown,ArrowDownToLine,Download,LoaderCircle,RotateCw,ArrowLeft,ArrowUp,ArrowUpToLine,Check,ChevronDown,ChevronRight,CircleAlert,CircleHelp,Cloud,Copy,
+  Archive,ArchiveRestore,CloudDownload,FastForward,ArrowDown,ArrowDownToLine,Download,LoaderCircle,RotateCw,ArrowLeft,ArrowUp,ArrowUpToLine,Check,ChevronDown,ChevronRight,CircleAlert,CircleHelp,Cloud,Copy,
   FileCode2,FolderGit2,GitBranch,GitBranchPlus,GitCommitHorizontal,GitMerge,Laptop,LockKeyhole,Maximize2,Minus,Pencil,Plus,
   RefreshCw,Search,Send,Sprout,Tag,Terminal,Trash2,TriangleAlert,Undo2,X
 } from 'lucide-react';
 import {ancestors,layoutGraph,palette,type History,type Commit} from './history';
 import {api} from './api';
+import {ClonePanel} from './Clone';
 
 type FileState={path:string;oldPath?:string;index:string;worktree:string;staged:boolean;unstaged:boolean;untracked:boolean;conflicted:boolean};
 type BranchRef={name:string;sha:string;remote:boolean;upstream?:string|null;ahead?:number;behind?:number};
@@ -20,14 +21,14 @@ function nextTag(last:string|null,existing:string[]){
   const bump=(t:string)=>{const m=/(\d+)(?!.*\d)/.exec(t);if(!m)return t+'.1';return t.slice(0,m.index)+String(Number(m[1])+1).padStart(m[1].length,'0')+t.slice(m.index+m[1].length);};
   let next=last?bump(last):'v1.0.0';for(let i=0;i<500&&existing.includes(next);i++)next=bump(next);return next;
 }
-type Workspace={tabs:{root:string;name:string}[];active:string|null;recent:{root:string;name:string;open:boolean}[];initialError:string};
+type Workspace={tabs:{root:string;name:string}[];active:string|null;recent:{root:string;name:string;open:boolean}[];cloneDir:string;initialError:string};
 type Choice={path:string;staged:boolean;sha?:string;conflicted?:boolean;stash?:boolean};
 type Label={key:string;text:string;local?:string;remote?:string;tag?:boolean;current:boolean;sha:string};
 type Preview={branch:string;current:string|null;into:string;needsCheckout:boolean;intoRemote:boolean;incoming:number;fastForward:boolean;inPlace?:boolean;conflicts:string[]};
 type Segment={type:'text';lines:string[]}|{type:'conflict';ours:string[];theirs:string[]};
 type Pick='ours'|'theirs'|'both'|'both-rev';
 type Update={current:string;kind:string;auto:boolean;status:'disabled'|'idle'|'checking'|'none'|'available'|'downloading'|'ready'|'installing'|'error';version?:string;percent?:number;error?:string;checkedAt?:number};
-declare global{interface Window{briar?:{desktop:boolean;pickFolder:()=>Promise<string|null>;update?:{state:()=>Promise<Update>;check:()=>Promise<Update>;install:()=>Promise<void>;onChange:(cb:(u:Update)=>void)=>()=>void}}}}
+declare global{interface Window{briar?:{desktop:boolean;pickFolder:(options?:{title?:string;defaultPath?:string})=>Promise<string|null>;update?:{state:()=>Promise<Update>;check:()=>Promise<Update>;install:()=>Promise<void>;onChange:(cb:(u:Update)=>void)=>()=>void}}}}
 const DRAG='text/x-briar-branch';
 
 // Divide o arquivo em trechos comuns e blocos <<<<<<< ======= >>>>>>> (diff3 incluso).
@@ -632,6 +633,9 @@ export default function App(){
   const [update,setUpdate]=useState<Update|null>(null);
   const [repoPath,setRepoPath]=useState('');
   const [opening,setOpening]=useState(false);
+  const [homeMode,setHomeMode]=useState<'open'|'clone'>('open');
+  const [cloning,setCloning]=useState(false);
+  const pathInput=useRef<HTMLInputElement>(null);
   const showHome=home||!ws?.tabs.length;
 
   useEffect(()=>{api('workspace').then((w:Workspace)=>{setWs(w);if(w.initialError)setError(w.initialError);}).catch(e=>setError((e as Error).message));},[]);
@@ -646,6 +650,10 @@ export default function App(){
   async function close(root:string){try{const r=await api('workspace/close',{root});setWs(r.workspace);setMeta(({[root]:_,...rest})=>rest);}catch(e){setError((e as Error).message);}}
   async function forget(root:string){try{const r=await api('workspace/forget',{root});setWs(r.workspace);}catch(e){setError((e as Error).message);}}
   async function pick(){const dir=await window.briar?.pickFolder();if(dir)await openPath(dir);}
+  // Clone terminado: o servidor já abriu a aba; basta reler o workspace.
+  const onCloned=useCallback(async(root:string)=>{try{const w:Workspace=await api('workspace');setWs(w);setHome(false);setHomeMode('open');setToast(`Clonado em ${root}.`);}catch(e){setError((e as Error).message);}},[]);
+  // A tela inicial fica montada (só escondida) para um clone em andamento continuar sendo acompanhado.
+  useEffect(()=>{if(showHome&&homeMode==='open')pathInput.current?.focus();},[showHome,homeMode]);
   async function checkUpdate(){const u=window.briar?.update;if(!u)return;const r=await u.check().catch(e=>({status:'error',error:String(e?.message||e)}) as Update);if(r.status==='none')setToast(`O Briar já está na versão mais nova (${r.current}).`);else if(r.status==='error')setError(`Não foi possível procurar atualização: ${r.error}`);}
 
   // Ctrl+T: nova aba · Ctrl+Tab / Ctrl+Shift+Tab: próxima / anterior · Esc na tela inicial volta para a aba.
@@ -676,21 +684,26 @@ export default function App(){
         </button>
         <button className="tab-close" aria-label={`Fechar ${t.name}`} title="Fechar aba (botão do meio do mouse também fecha)" onClick={()=>close(t.root)}><X size={12}/></button>
       </div>;})}
-      <button className={`tab-add ${showHome?'on':''}`} onClick={onHome} title="Abrir repositório em nova aba (Ctrl+T)" aria-label="Nova aba"><Plus size={15}/></button>
+      <button className={`tab-add ${showHome?'on':''}`} onClick={onHome} title={cloning?'Clonando… (clique para acompanhar)':'Abrir ou clonar repositório em nova aba (Ctrl+T)'} aria-label="Nova aba">{cloning?<LoaderCircle size={15} className="spinning"/>:<Plus size={15}/>}</button>
     </nav>
     {ws.tabs.map(t=><Repo key={t.root} root={t.root} active={!showHome&&ws.active===t.root} updatePill={updatePill} versionLabel={versionLabel} onHome={onHome} onClose={()=>close(t.root)} onMeta={onMeta}/>)}
-    {showHome&&<div className="welcome home"><div className="welcome-card home-card">
+    <div className="welcome home" hidden={!showHome}><div className={`welcome-card home-card ${homeMode==='clone'?'cloning':''}`}>
       <span className="brand"><span className="brand-icon"><Sprout size={18}/></span><span>Briar</span></span>
-      <h1>Abrir repositório</h1>
+      <div className="home-head"><h1>{homeMode==='clone'?'Clonar repositório':'Abrir repositório'}</h1>
+        <div className="seg" role="tablist" aria-label="Abrir ou clonar"><button role="tab" aria-selected={homeMode==='open'} className={homeMode==='open'?'on':''} onClick={()=>setHomeMode('open')}><FolderGit2 size={13}/>Abrir</button><button role="tab" aria-selected={homeMode==='clone'} className={homeMode==='clone'?'on':''} onClick={()=>setHomeMode('clone')}><CloudDownload size={13}/>Clonar</button></div></div>
+      <div hidden={homeMode!=='clone'}><ClonePanel defaultDir={ws.cloneDir} onCloned={onCloned} onRunning={setCloning}/></div>
+      {homeMode==='open'&&<>
       {recent.length>0&&<><div className="recent-title">Repositórios salvos</div><div className="recent">{recent.map(r=><div key={r.root} className="recent-row">
         <button className="recent-main" disabled={opening} onClick={()=>r.open?activate(r.root):openPath(r.root)} title={r.open?'Ir para a aba':'Abrir numa nova aba'}><FolderGit2 size={15}/><span className="recent-text"><b>{r.name}</b><span>{r.root}</span></span>{r.open&&<span className="recent-open">aberto</span>}</button>
         {!r.open&&<button className="recent-forget" title="Tirar da lista (não apaga nada do disco)" aria-label={`Tirar ${r.name} da lista`} onClick={()=>forget(r.root)}><X size={13}/></button>}
       </div>)}</div></>}
-      <form className="connect-form" onSubmit={e=>{e.preventDefault();void openPath(repoPath);}}><label htmlFor="repo-path">{recent.length?'Outro clone neste computador':'Caminho do clone neste computador'}</label><input id="repo-path" autoFocus value={repoPath} onChange={e=>setRepoPath(e.target.value)} placeholder="~/Projetos/projeto-pindorama" autoComplete="off" spellCheck={false}/><p>O aplicativo usa o Git instalado na sua máquina. Cada repositório abre numa aba e fica salvo nesta lista.</p><div className="connect-actions">{window.briar?.desktop&&<button type="button" className="btn ghost" disabled={opening} onClick={pick}><FolderGit2 size={15}/>Escolher pasta…</button>}<button disabled={opening||!repoPath.trim()} className="btn primary" type="submit"><FolderGit2 size={15}/>{opening?'Abrindo…':'Abrir repositório'}</button></div></form>
+      <form className="connect-form" onSubmit={e=>{e.preventDefault();void openPath(repoPath);}}><label htmlFor="repo-path">{recent.length?'Outro clone neste computador':'Caminho do clone neste computador'}</label><input id="repo-path" ref={pathInput} autoFocus value={repoPath} onChange={e=>setRepoPath(e.target.value)} placeholder="~/Projetos/projeto-pindorama" autoComplete="off" spellCheck={false}/><p>O aplicativo usa o Git instalado na sua máquina. Cada repositório abre numa aba e fica salvo nesta lista.</p><div className="connect-actions">{window.briar?.desktop&&<button type="button" className="btn ghost" disabled={opening} onClick={pick}><FolderGit2 size={15}/>Escolher pasta…</button>}<button disabled={opening||!repoPath.trim()} className="btn primary" type="submit"><FolderGit2 size={15}/>{opening?'Abrindo…':'Abrir repositório'}</button></div></form>
+      <p className="home-switch">Ainda não tem o projeto no computador? <button className="linkish" onClick={()=>setHomeMode('clone')}>Clonar do GitHub ou de uma URL</button></p>
+      </>}
       {error&&<div className="inline-error" role="alert">{error}<button aria-label="Dispensar" onClick={()=>setError('')}><X size={13}/></button></div>}
       <p className="welcome-note"><LockKeyhole size={13}/>Servidor local em 127.0.0.1. Nada é enviado para hospedagem.{ws.tabs.length>0&&<> · <kbd>Esc</kbd> volta para a aba</>}</p>
       {updatePill&&<div className="welcome-update">{updatePill}</div>}
-    </div></div>}
+    </div></div>
     {!showHome&&error&&<div className="error-toast" role="alert"><CircleAlert size={15}/><span>{error}</span><button aria-label="Dispensar erro" onClick={()=>setError('')}><X size={14}/></button></div>}
     {toast&&<div className="toast" role="status"><Check size={15}/>{toast}</div>}
   </div>;
