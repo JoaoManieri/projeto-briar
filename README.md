@@ -1,146 +1,146 @@
-# Briar — cliente Git do time
+<div align="center">
 
-Cliente Git de desktop no estilo GitKraken, feito para o time da Hipona Studios. Roda no seu computador, sobre o seu clone local, usando o Git instalado na máquina.
+<img src="build/icon.png" width="88" alt="Briar logo">
 
-## Baixar
+# Briar
 
-| Sistema | Download | Observação |
+**The free, open-source Git GUI with a commit graph you'll actually enjoy using.**
+
+Visual branch graph · drag-and-drop merges · side-by-side conflict resolution · tabs · stash · one-click clone from GitHub.<br>
+Private repositories included. No account. No subscription. No telemetry.
+
+[![Latest release](https://img.shields.io/github/v/release/JoaoManieri/projeto-briar?label=latest&color=4fc3a1)](https://github.com/JoaoManieri/projeto-briar/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-4fc3a1)](LICENSE)
+![Platforms: Windows and Linux](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux-5aa7ef)
+
+[**Download for Windows**](https://github.com/JoaoManieri/projeto-briar/releases/latest/download/Briar-Setup.exe) &nbsp;·&nbsp;
+[**Download for Linux**](https://github.com/JoaoManieri/projeto-briar/releases/latest/download/Briar-x86_64.AppImage) &nbsp;·&nbsp;
+[All downloads](#download) &nbsp;·&nbsp;
+[🇧🇷 Português](README.pt-BR.md)
+
+</div>
+
+![Briar showing a real project's commit graph, the work-in-progress row, staged files and the commit box](docs/images/hero.png)
+
+## Why Briar?
+
+The nicest Git GUIs tend to put the essentials behind a sign-in screen and a monthly plan: private repositories, multiple tabs, a proper merge-conflict editor. **Briar doesn't.** Every feature works on every repository you have — public, private or your company's — and the whole app is MIT-licensed.
+
+- **Free for real.** Private and organization repositories work out of the box. No trial, no "Pro" tier, no seat limits.
+- **No sign-in.** Briar uses the Git and SSH credentials you already have. It never asks for your password.
+- **Local-first.** Your code never leaves your machine. The interface talks to Git through a server bound to `127.0.0.1` only.
+- **Real Git under the hood.** Every action runs the `git` you already have installed, and dialogs show you the exact command before it runs. No hidden magic, no proprietary repo format.
+- **Safe by default.** No force push, no `reset --hard`, no rebase. Discarded changes go to the stash first and can be undone with one click.
+
+## Features
+
+### A commit graph you can read at a glance
+
+![Busy commit graph with eight colored lanes and a selected commit showing its changed files](docs/images/graph.png)
+
+- Every line of development gets its own colored lane; your current branch always sits in the first column, drawn thicker.
+- Local and remote branches pointing at the same commit share one label (laptop and cloud icons), so the graph stays clean.
+- Several branches on one commit collapse into **+N**; hover to see them all, click to check out, drag to merge.
+- Search by message, author or hash (<kbd>/</kbd>), highlight one branch's history, filter by author, zoom, and move with <kbd>↑</kbd> <kbd>↓</kbd>.
+- Click a commit to see the files it touched and the diff of each one.
+
+### Drag. Drop. Merged.
+
+![Merge preview predicting 12 incoming commits and conflicts in 5 files before merging](docs/images/merge-preview.png)
+
+- Drag a branch onto another — in the sidebar, on the graph or on the branch picker — to merge it.
+- Before anything changes, Briar tells you how many commits are coming in and **exactly which files will conflict**.
+- Target branch simply behind on the same line? Briar fast-forwards it — even when it isn't the branch you're on, without a checkout.
+- Double-click any branch to check it out. Double-click a remote branch and Briar switches to your local copy and catches it up.
+
+### Merge conflicts, side by side
+
+![Conflict editor showing your version and the incoming version next to each other, with one-click choices](docs/images/conflict-editor.png)
+
+- Every conflicting hunk is shown as **your version** next to the **incoming** one. One click keeps yours, takes theirs, or keeps both (in either order).
+- A red banner keeps the conflict visible — even after a restart — until someone resolves it or aborts.
+- Prefer your own editor? Fix the file there and mark it resolved. Then finish the merge — or abort and get your branch back exactly as it was.
+
+### Clone from a URL — or straight from your GitHub account
+
+<img src="docs/images/clone.png" width="560" alt="Clone screen with a repository URL, destination folder and the git clone command">
+
+- Paste any Git URL (HTTPS, SSH or a local path), choose a folder, and watch live progress. Cancel anytime.
+- Or connect GitHub — with your existing **GitHub CLI** login or a personal access token — and pick from a searchable list of your personal, organization and collaborator repositories.
+- The token is encrypted by your operating system's keychain and only used to list repositories and clone over HTTPS. It never ends up in the remote URL or in `.git/config`.
+- The new clone opens in its own tab as soon as it's done.
+
+### Everything else you'd expect
+
+- **Tabs** for multiple repositories (<kbd>Ctrl</kbd>+<kbd>T</kbd>, <kbd>Ctrl</kbd>+<kbd>Tab</kbd>), each with its own state. An operation running in one tab never blocks the others.
+- **Stage, unstage and commit** with a commit box that stays on screen no matter how many files you changed.
+- **Stash** with a message, staged-only or including untracked files; pop, apply, create a branch from a stash, and undo a drop.
+- **Discard with a safety net**: changes are stashed first and an undo button shows up right away.
+- **Tags** that suggest the next version for you (`v1.0.4` → `v1.0.5`), annotated tags, push and delete — locally or on the remote.
+- **Branches**: create from any commit, delete local and/or remote, with protection against losing commits that exist nowhere else.
+- **Pull** (fast-forward or merge), **Push** (sets the upstream on the first push, never forces) and **Fetch**, plus a quiet background auto-fetch.
+- **Right-click menus** on branches, tags and commits.
+- **Operation log** with every Git command Briar ran during the session.
+- **Automatic updates** on Windows and Linux.
+
+> The screenshots show the real history of *Pindorama*, an indie game whose team uses Briar every day — busy branches, weekly merges, real conflicts.
+
+## Download
+
+| System | Download | Notes |
 | --- | --- | --- |
-| **Windows** | [**Briar-Setup.exe**](https://github.com/JoaoManieri/projeto-briar/releases/latest/download/Briar-Setup.exe) | Instalador (recomendado) |
-| Windows | [Briar-Portable.exe](https://github.com/JoaoManieri/projeto-briar/releases/latest/download/Briar-Portable.exe) | Roda sem instalar |
-| **Linux** | [**Briar-x86_64.AppImage**](https://github.com/JoaoManieri/projeto-briar/releases/latest/download/Briar-x86_64.AppImage) | Qualquer distribuição |
-| Linux (Ubuntu/Debian) | [Briar-amd64.deb](https://github.com/JoaoManieri/projeto-briar/releases/latest/download/Briar-amd64.deb) | Aparece no menu de aplicativos |
+| **Windows** | [**Briar-Setup.exe**](https://github.com/JoaoManieri/projeto-briar/releases/latest/download/Briar-Setup.exe) | Installer (recommended) |
+| Windows | [Briar-Portable.exe](https://github.com/JoaoManieri/projeto-briar/releases/latest/download/Briar-Portable.exe) | Runs without installing |
+| **Linux** | [**Briar-x86_64.AppImage**](https://github.com/JoaoManieri/projeto-briar/releases/latest/download/Briar-x86_64.AppImage) | Any distribution |
+| Linux (Ubuntu/Debian) | [Briar-amd64.deb](https://github.com/JoaoManieri/projeto-briar/releases/latest/download/Briar-amd64.deb) | Shows up in your app menu |
 
-Todas as versões: [página de Releases](https://github.com/JoaoManieri/projeto-briar/releases).
+Every version is on the [Releases page](https://github.com/JoaoManieri/projeto-briar/releases).
 
-### Antes de instalar
+**Before installing**, make sure [Git](https://git-scm.com/downloads) is installed. Push and pull use the same authentication as your terminal.
 
-Instale o **Git** ([git-scm.com/downloads](https://git-scm.com/downloads)). Para push e pull, ele precisa estar autenticado no GitHub do mesmo jeito que no terminal.
+- **Windows:** run `Briar-Setup.exe`. The executables aren't code-signed yet, so SmartScreen may warn you: click **More info → Run anyway**.
+- **Linux (AppImage):** `chmod +x Briar-x86_64.AppImage` and open it.
+- **Linux (.deb):** `sudo apt install ./Briar-amd64.deb`.
 
-### Instalar
+Then click **Escolher pasta…** (choose folder) to open a repository you already have, or **Clonar** (clone) to download one. Briar checks for updates on launch and every 4 hours; on the installer, AppImage and .deb builds the update downloads in the background and asks you to restart.
 
-- **Windows:** abra `Briar-Setup.exe` e siga o instalador. Os executáveis não são assinados, então o SmartScreen pode avisar. Nesse caso clique em **Mais informações → Executar assim mesmo**.
-- **Linux (AppImage):** `chmod +x Briar-x86_64.AppImage` e abra o arquivo.
-- **Linux (.deb):** `sudo apt install ./Briar-amd64.deb`. Para desinstalar: `sudo apt remove briar`.
+## FAQ
 
-Ao abrir, clique em **Escolher pasta…** e selecione o seu clone, por exemplo `~/Projetos/projeto-pindorama`. O caminho fica salvo, e as abas abertas voltam na próxima vez.
+**Is it really free?**
+Yes. MIT license, every feature, as many private repositories as you want, no account.
 
-### Atualizar
+**Does it work with GitLab, Bitbucket, Azure DevOps or my own server?**
+Yes — anything `git` can talk to. GitHub additionally gets the repository list on the clone screen.
 
-O Briar procura versão nova ao abrir e depois a cada 4 horas. Para procurar na hora, clique na versão (**Briar 0.x.y**) no canto inferior direito.
+**Does Briar store my password?**
+No. Push, pull and fetch go through your existing Git credential helper or SSH keys. The optional GitHub token is only used to list and clone repositories, and it's stored encrypted by your OS (or kept in memory only, if no keychain is available).
 
-- **Instalador do Windows, AppImage e .deb:** a nova versão é baixada em segundo plano. Quando terminar, aparece **Reiniciar para atualizar** no topo. No `.deb` a instalação pede a senha de administrador.
-- **Briar-Portable.exe:** aparece **Versão X disponível**, que abre a página de download. Baixe o novo executável no lugar do antigo.
+**What language is the interface in?**
+Brazilian Portuguese 🇧🇷, for now. The buttons are the Git words you already know — *Pull*, *Push*, *Fetch*, *Stage*, *Merge*, *Stash* — and every dialog shows the Git command it will run.
 
-A atualização automática começou na versão 0.4.0. Quem tem uma versão anterior precisa instalar a 0.4.0 manualmente uma vez.
+**macOS?**
+There are no published macOS builds yet. Briar is plain Electron + Node, so running it from source should work, but it hasn't been tested there.
 
-## O que ele faz
+## Build from source
 
-- **Vários repositórios em abas**, como no GitKraken.
-  - O **+** (ou <kbd>Ctrl</kbd>+<kbd>T</kbd>) mostra os repositórios salvos e permite abrir outro clone. Clicar no nome do repositório na barra de ferramentas faz o mesmo.
-  - Cada aba tem o próprio estado. Um push numa aba não trava as outras.
-  - A aba mostra a branch atual, um ponto quando há alterações não commitadas e um aviso quando há merge em andamento.
-  - <kbd>Ctrl</kbd>+<kbd>Tab</kbd> troca de aba. O botão do meio do mouse fecha a aba.
-- **Descartar alterações (lixeira vermelha no WIP).**
-  - Em cada arquivo, ou em **Descartar** no topo de Unstaged para todos de uma vez. Sempre pede confirmação.
-  - O arquivo volta a ficar como no último commit: arquivos apagados voltam e arquivos novos somem.
-  - Nada se perde de vez. As alterações vão para o stash do Git como "Briar: descartado…" e o aviso que aparece depois tem **Desfazer**. Mais tarde dá para recuperar com `git stash list` e `git stash apply`.
-- **Stash do WIP.**
-  - **Stash** no topo, ou no painel do WIP, guarda as alterações e limpa a área de trabalho. Dá para guardar só o que está em Staged e escolher se os arquivos novos entram.
-  - Os stashes ficam na seção **STASHES** da lateral. Clicar num deles abre as opções e mostra os arquivos e o diff: **Pop** (aplica e remove), **Aplicar** (mantém guardado), **Branch** (cria uma branch onde o stash foi feito e o aplica ali) e **Apagar**, que tem **Desfazer** logo depois.
-  - **Pop** no topo traz de volta o stash mais recente.
-  - Se aplicar der conflito, os arquivos vão para "Conflitos" no WIP e o stash continua guardado.
-- **Checkout com duplo clique.** Numa branch remota cuja local já existe (ex.: `origin/main` com `main`), o Briar troca para a local e a atualiza até o remoto quando possível. Se elas divergiram, ele avisa para fazer merge.
-- **Arrastar para fazer merge.** Arraste uma branch sobre outra: na lateral, num rótulo do grafo ou no seletor de branch do topo.
-  - Antes do merge aparece quantos commits entram e quais arquivos vão dar conflito.
-  - Se o destino não é a branch atual, o Briar faz o checkout dele antes.
-  - Se o destino é remoto, o merge vai para a branch local equivalente. Depois é só dar **Push**.
-  - **Fast-forward:** se o destino só está atrás, na mesma linha, o Briar apenas avança a branch. Quando não é a branch atual, isso acontece sem checkout, e você continua onde está. O WIP não precisa estar limpo nesse caso.
-  - Uma branch local atrás do remoto mostra ↓N na lateral. O botão ⏩ (ou **Fast-forward até origin/…** no botão direito) a atualiza sem trocar de branch.
-- **Conflitos visíveis até alguém resolver.**
-  - Uma faixa vermelha fica no topo e a branch aparece como **CONFLITO**. Isso continua mesmo depois de fechar e abrir o app, porque é o estado do próprio Git.
-  - Cada arquivo abre num editor por trecho, com *sua versão* e *recebida* lado a lado e os botões *Usar a minha*, *Usar a recebida* ou *As duas*.
-  - Depois, **Concluir merge** ou **Abortar**.
-- **Botão direito em branches, tags e commits** (na lateral, no grafo e na lista "+N").
-  - **Branch:** checkout, merge na atual, criar tag ali, apagar a local, apagar no remoto ou as duas.
-    - A branch atual não pode ser apagada.
-    - Se os commits dela não estão em nenhuma outra branch, o Briar recusa até você marcar "Apagar mesmo assim".
-  - **Criar tag:** o nome já vem com o próximo número da última tag criada (`v1.0.4` → `v1.0.5`).
-    - Não deixa repetir uma tag que já existe.
-    - Com mensagem, vira tag anotada.
-    - A caixa "Enviar a tag (push)" vem marcada.
-  - **Tag:** push para o remoto, localizar no grafo, apagar local, apagar no remoto ou nos dois.
-  - **Commit:** criar tag ou branch ali, copiar o hash.
-- **Grafo** no estilo GitKraken, com a branch atual sempre na primeira coluna.
-  - Quando um commit tem várias branches, aparece **+N**. Ao passar o mouse abre a lista delas: clique numa para fazer checkout, ou arraste para fazer merge.
-- **// WIP:** a linha no topo mostra os arquivos ainda não commitados. No painel direito ficam Stage/Unstage, diff e commit.
-- **Pull** (fast-forward ou com merge), **Push** (cria o upstream na primeira vez, nunca faz force push), **Fetch** e **Branch**.
-- Histórico das operações Git da sessão (ícone de terminal).
-
-Não há rebase, reset hard nem force push. A troca de branch é bloqueada quando há alterações em arquivos rastreados (arquivos novos não atrapalham). A autenticação usa a configuração de Git/SSH já existente: o Briar nunca pede senha ou token.
-
-Cada pessoa usa o Briar no próprio computador, com o próprio clone. O time continua se comunicando pelo remoto Git (push/pull).
-
-## Desenvolver
-
-Requer **Node.js 22.13+** e **Git**.
+Requires **Node.js 22.13+** and **Git**.
 
 ```bash
+git clone https://github.com/JoaoManieri/projeto-briar.git
+cd projeto-briar
 npm install
-npm run app        # compila a interface e abre o Briar numa janela
-npm run dev        # modo navegador com recarga automática: http://127.0.0.1:5173
-npm test           # testes com repositórios temporários (não tocam no Pindorama)
+npm run app     # build the interface and open Briar in a window
+npm run dev     # browser mode with hot reload at http://127.0.0.1:5173
+npm test        # tests run against throwaway repositories
 ```
 
-No modo navegador dá para indicar o clone ao iniciar: `npm run dev -- --repo ~/Projetos/projeto-pindorama`.
+- `src/` — the interface (React + TypeScript).
+- `server/` — Git operations, calling your system's `git`; cloning and the GitHub account.
+- `electron/` — the desktop window and auto-updates.
+- `tests/` — tests for the Git layer.
 
-Estrutura:
+Every push to `main` publishes a new release automatically. The release process is documented (in Portuguese) in [README.pt-BR.md](README.pt-BR.md#publicar-uma-versão).
 
-- `src/`: interface (React).
-- `server/`: operações Git, chamando o `git` do sistema.
-- `electron/`: janela do aplicativo.
-- `tests/`: testes da camada Git.
+## License
 
-## Publicar uma versão
-
-Os links de download e a atualização automática usam sempre a Release mais recente do repositório `JoaoManieri/projeto-briar`.
-
-**É automático: todo push na `main` publica uma versão nova.** O workflow **Instaladores** (`.github/workflows/build.yml`) faz o seguinte:
-
-1. Calcula a versão com `scripts/next-version.mjs`. Normalmente é a última tag mais 1 no patch (`v0.6.2` → `0.6.3`).
-2. Gera os instaladores de Windows e Linux com essa versão.
-3. Publica a Release `vX.Y.Z` com os instaladores e os arquivos da atualização automática. A tag é criada nesse momento.
-
-- **Subir minor ou major:** mude a versão no `package.json` (ex.: `0.7.0`) e faça o push. Se ela for maior que a última tag, vale ela. Depois disso o patch volta a subir sozinho.
-- **Push sem Release:** ponha `[skip ci]` na mensagem do commit. Pushes que só mexem em arquivos `.md`, `LICENSE` ou `.gitignore` também não geram Release.
-- **Não crie tags `v*` à mão.** O próprio workflow cria.
-- Se o build falhar, a Release fica como rascunho e nada chega aos usuários. O próximo push tenta de novo com o mesmo número.
-
-Para gerar e publicar à mão (só se o GitHub Actions estiver fora do ar):
-
-1. Suba a versão em `package.json` (ex.: `0.4.1`).
-2. Gere os instaladores. Eles saem em `release/`, sem a versão no nome, para os links continuarem valendo.
-   - **No Windows:** `npm ci` e depois `npm run dist:win`. Gera `Briar-Setup.exe`, `Briar-Portable.exe`, `Briar-Setup.exe.blockmap` e `latest.yml`.
-   - **No Linux:** `npm ci` e depois `npm run dist:linux`. Gera `Briar-x86_64.AppImage`, `Briar-amd64.deb` e `latest-linux.yml`.
-   - Os arquivos `.yml` e `.blockmap` são o que a atualização automática lê. Envie-os junto com os instaladores.
-3. Crie a Release e envie os arquivos. Com o GitHub CLI:
-
-   ```bash
-   gh release create v0.4.1 --title "Briar 0.4.1" --notes "O que mudou…"
-   gh release upload v0.4.1 release/Briar-Setup.exe release/Briar-Portable.exe release/Briar-Setup.exe.blockmap release/latest.yml   # do Windows
-   gh release upload v0.4.1 release/Briar-x86_64.AppImage release/Briar-amd64.deb release/latest-linux.yml                          # do Linux
-   ```
-
-   Também dá para arrastar os arquivos na página da Release, no site do GitHub.
-
-O ícone sai de `public/favicon.svg`. Para regenerar: `npx electron scripts/make-icon.mjs`.
-
-## Limites
-
-- **Histórico carregado:**
-  - O grafo carrega até 300 commits recentes de todas as referências e até 300 ancestrais do HEAD. Pontas tracejadas indicam ancestrais fora desse recorte.
-  - Commits de merge mostram os pais em vez de um diff.
-- **Diffs:** a revisão é por arquivo inteiro e cada diff vai até 250 KB.
-- **Atualização:**
-  - O estado é relido a cada 15 s, ao voltar à janela e após cada operação.
-  - Fetch só acontece quando você clica nele ou num pull.
+[MIT](LICENSE) © João Manieri

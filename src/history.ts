@@ -26,7 +26,7 @@ export type GraphEdge = {fromRow:number; fromCol:number; toRow:number; toCol:num
 export type GraphLayout = {rows:Commit[]; cols:Map<string,number>; rowOf:Map<string,number>; edges:GraphEdge[]; width:number};
 
 /**
- * Lane layout in the style of GitKraken: lanes are reused once a branch line ends.
+ * Lane layout: lanes are reused once a branch line ends.
  * `seed` reserves column 0 for the given commit (HEAD or WIP) so the current branch stays leftmost.
  */
 export function layoutGraph(commits:Commit[], seed?:string|null):GraphLayout {

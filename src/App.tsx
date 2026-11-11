@@ -626,7 +626,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
 }
 
 type Meta={busy:boolean;changes:number;branch:string|null;conflict:boolean};
-// Abas no estilo GitKraken: cada repositório aberto é uma aba com estado próprio (seleção, mensagem de
+// Abas: cada repositório aberto é uma aba com estado próprio (seleção, mensagem de
 // commit, operação em andamento). Trocar de aba não interrompe o que está rodando nas outras.
 export default function App(){
   const [ws,setWs]=useState<Workspace|null>(null);
