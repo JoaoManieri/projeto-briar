@@ -2,11 +2,14 @@ import http from 'node:http';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {readFile,writeFile,mkdir,realpath} from 'node:fs/promises';
+import {existsSync} from 'node:fs';
+import {homedir} from 'node:os';
 import {GitRepository,GitError} from './git.mjs';
+import {CloneJobs} from './clone.mjs';
 const project=path.resolve(fileURLToPath(new URL('../',import.meta.url)));
 // Vários repositórios abertos ao mesmo tempo (abas). Cada pedido da interface diz qual aba é
 // pelo cabeçalho X-Briar-Repo; sem ele, vale a aba ativa.
-// settings.json: {tabs:[caminhos abertos], active:caminho, recent:[caminhos já usados]}.
+// settings.json: {tabs:[caminhos abertos], active:caminho, recent:[caminhos já usados], cloneDir, cloneProtocol}.
 export async function createApp({repoPath=process.env.PINDORAMA_REPO,port=4317,persist=true,configPath,distPath}={}){
  const config=configPath||path.join(project,'.pindorama','settings.json');
  const open=new Map();let active=null,recent=[],initialError='';
@@ -18,8 +21,13 @@ export async function createApp({repoPath=process.env.PINDORAMA_REPO,port=4317,p
  active=open.has(saved.active)?saved.active:[...open.keys()][0]||null;
  const remember=root=>{recent=[root,...recent.filter(p=>p!==root)].slice(0,30);};
  for(const root of open.keys())remember(root);
- async function save(){if(!persist)return;await mkdir(path.dirname(config),{recursive:true});await writeFile(config,JSON.stringify({tabs:[...open.keys()],active,recent},null,2),{mode:0o600});}
- const workspace=()=>({tabs:[...open.values()].map(r=>({root:r.root,name:path.basename(r.root)})),active,recent:recent.map(root=>({root,name:path.basename(root),open:open.has(root)})),initialError});
+ // Clone
+ const clones=new CloneJobs();
+ let cloneDir=typeof saved.cloneDir==='string'?saved.cloneDir:null,cloneProtocol=['ssh','https'].includes(saved.cloneProtocol)?saved.cloneProtocol:null;
+ // Pasta sugerida para clonar: a última usada, senão a pasta do último repositório aberto, senão ~/Projetos.
+ const defaultCloneDir=()=>{if(cloneDir&&existsSync(cloneDir))return cloneDir;const last=recent[0]&&path.dirname(recent[0]);if(last&&existsSync(last))return last;for(const d of ['Projetos','Projects','projects']){const p=path.join(homedir(),d);if(existsSync(p))return p;}return homedir();};
+ async function save(){if(!persist)return;await mkdir(path.dirname(config),{recursive:true});await writeFile(config,JSON.stringify({tabs:[...open.keys()],active,recent,cloneDir,cloneProtocol},null,2),{mode:0o600});}
+ const workspace=()=>({tabs:[...open.values()].map(r=>({root:r.root,name:path.basename(r.root)})),active,recent:recent.map(root=>({root,name:path.basename(root),open:open.has(root)})),cloneDir:defaultCloneDir(),initialError});
  const allowedHosts=new Set([`127.0.0.1:${port}`,`localhost:${port}`,'127.0.0.1:5173','localhost:5173']);
  const origins=new Set([...allowedHosts].map(h=>'http://'+h));
  const send=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data));};
@@ -37,6 +45,7 @@ export async function createApp({repoPath=process.env.PINDORAMA_REPO,port=4317,p
     if(req.headers['x-briar-repo']){try{key=decodeURIComponent(String(req.headers['x-briar-repo']));}catch{throw new GitError('Repositório inválido.');}}
     const repo=key?open.get(key):null;
     if(url.pathname==='/api/workspace'&&req.method==='GET')return send(res,200,workspace());
+    if(url.pathname==='/api/clone'&&req.method==='GET')return send(res,200,clones.get(url.searchParams.get('id')));
     if(url.pathname==='/api/state'&&req.method==='GET'){
      if(!repo)return send(res,key?404:200,key?{error:'Essa aba não está mais aberta.'}:{status:null,history:null,initialError});
      return send(res,200,{status:await repo.status(),history:await repo.history(),initialError:''});
@@ -57,6 +66,15 @@ export async function createApp({repoPath=process.env.PINDORAMA_REPO,port=4317,p
      return send(res,200,{ok:true,workspace:workspace()});
     }
     if(url.pathname==='/api/workspace/forget'){recent=recent.filter(p=>p!==input.root);await save();return send(res,200,{ok:true,workspace:workspace()});}
+    // Clonar: começa em segundo plano; a interface acompanha por GET /api/clone?id=…. Quando termina, o
+    // clone abre numa aba nova.
+    if(url.pathname==='/api/clone/start'){
+     if(['ssh','https'].includes(input.protocol))cloneProtocol=input.protocol;
+     const job=await clones.start({url:input.url,parent:input.parent,name:input.name},async dest=>{const r=await GitRepository.open(dest);if(!open.has(r.root))open.set(r.root,r);active=r.root;remember(r.root);initialError='';await save();return r.root;});
+     cloneDir=path.dirname(job.dest);await save();
+     return send(res,200,job);
+    }
+    if(url.pathname==='/api/clone/cancel')return send(res,200,clones.cancel(input.id));
     if(!repo)throw new GitError(key?'Essa aba não está mais aberta.':'Abra um clone local primeiro.',key?404:400);
     if(url.pathname==='/api/diff')return send(res,200,{diff:await repo.diff(input)});
     if(url.pathname==='/api/stash-files')return send(res,200,await repo.stashFiles(input.sha));
