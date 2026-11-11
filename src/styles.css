@@ -396,3 +396,48 @@ kbd{font-size:10px;border:1px solid var(--line-2);border-radius:3px;padding:0 4p
 .side-empty{padding:4px 12px 8px 22px;font-size:11.5px;color:var(--muted)}
 .stash-meta{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted);margin:6px 0 10px}.stash-meta b{color:#c7cfd8;font-weight:600}
 .stash-actions{display:flex;flex-wrap:wrap;gap:6px}
+
+/* clonar */
+.home-head{display:flex;align-items:center;gap:12px;margin:0 0 14px}
+.home-head h1{margin:0;flex:1}
+.home-card.cloning{width:min(680px,100%)}
+.home-switch{margin:14px 0 0;font-size:12px;color:var(--muted)}
+.seg{display:inline-flex;gap:2px;padding:2px;background:var(--bg);border:1px solid var(--line-2);border-radius:6px;flex-shrink:0}
+.seg button{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:4px;font-size:12px;font-weight:600;color:var(--muted)}
+.seg button.on{background:var(--bg-4);color:var(--text)}
+.seg button:hover:not(:disabled):not(.on){color:var(--text)}
+.clone{display:flex;flex-direction:column;gap:2px}
+.clone>.seg{align-self:flex-start;margin-bottom:12px}
+.input-row{display:flex;gap:6px;align-items:center}
+.input-row input{flex:1;min-width:0}
+.clone-grid{display:grid;grid-template-columns:1fr 200px;gap:0 10px}
+.clone-protocol{display:flex;align-items:center;gap:14px;font-size:12px;color:var(--muted);margin:-4px 0 0}
+.clone-protocol .radio{padding:0;color:var(--text)}
+.clone-dest .cmd{margin:10px 0 12px;word-break:break-all}
+.clone-hint{align-self:center}
+.clone-progress{display:flex;flex-direction:column;gap:7px}
+.clone-bar{height:6px;border-radius:4px;background:var(--bg);overflow:hidden;border:1px solid var(--line)}
+.clone-bar span{display:block;height:100%;background:var(--accent);border-radius:4px;transition:width .3s}
+.clone-bar.indeterminate span{animation:clone-slide 1.2s ease-in-out infinite}
+@keyframes clone-slide{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
+.clone-status{display:flex;align-items:center;gap:6px;font-size:12px}
+.gh-connect{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.gh-connect form{align-self:stretch;margin-top:4px}
+.gh-connect .field{margin-bottom:6px}
+.gh-connect a,.clone a{color:var(--blue)}
+.warn-note{color:#ffcf8a}
+.gh-account{display:flex;align-items:center;gap:8px;font-size:12.5px;margin-bottom:8px}
+.gh-account img{border-radius:50%;background:var(--bg-4)}
+.gh-filter{margin:0 0 6px}
+.gh-repos{display:flex;flex-direction:column;gap:1px;height:260px;overflow:auto;border:1px solid var(--line-2);border-radius:7px;padding:4px;margin-bottom:14px}
+.gh-empty{display:flex;align-items:center;gap:6px;padding:10px;margin:0}
+.gh-repo{display:flex;align-items:center;gap:10px;padding:6px 9px;border-radius:5px;text-align:left;color:var(--text)}
+.gh-repo:hover:not(:disabled){background:var(--bg-4)}
+.gh-repo.on{background:#4fc3a11f;box-shadow:inset 2px 0 0 var(--accent)}
+.gh-vis{color:var(--muted)}
+.gh-repo.on .gh-vis{color:var(--accent)}
+.gh-repo-text{flex:1;min-width:0;display:flex;flex-direction:column}
+.gh-repo-name{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gh-repo-desc{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gh-repo-date{font-size:11px;color:var(--dim);white-space:nowrap}
+.gh-badge{margin-left:6px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);border:1px solid var(--line-2);border-radius:8px;padding:0 5px}
