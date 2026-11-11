@@ -29,7 +29,7 @@
     "typescript": "5.9.3",
     "vite": "8.0.13"
   },
-  "description": "Briar — cliente Git local (estilo GitKraken) para o time da Hipona Studios.",
+  "description": "Free, open-source Git GUI with a visual commit graph, drag-and-drop merges and side-by-side conflict resolution.",
   "author": "Hipona Studios",
   "homepage": "https://github.com/JoaoManieri/projeto-briar",
   "license": "MIT",
