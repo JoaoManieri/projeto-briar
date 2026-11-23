@@ -9,9 +9,11 @@ on:
     paths-ignore: ['**/*.md', 'LICENSE', '.gitignore']
   workflow_dispatch:
 
-# Necessário para criar a Release (e a tag dela) com o GITHUB_TOKEN
+# contents: criar a Release (e a tag dela) com o GITHUB_TOKEN
+# actions: a SignPath baixa os executáveis a assinar dos artefatos deste workflow
 permissions:
   contents: write
+  actions: read
 
 # Um release por vez: dois pushes seguidos geram 0.6.3 e depois 0.6.4, sem disputar o número.
 concurrency:
@@ -76,6 +78,59 @@ jobs:
       - run: npm version "$V" --no-git-tag-version --allow-same-version
       - run: npm test
       - run: npm run ${{ matrix.script }}
+
+      # Assinatura do Windows pela SignPath Foundation. Só roda quando a variável SIGNPATH_ORGANIZATION_ID
+      # existe no repositório (passo a passo em docs/assinatura-windows.md); sem ela, os instaladores saem
+      # sem assinatura, como antes.
+      # 1) assina o Briar.exe já empacotado (a pasta do build completo tem o app-update.yml do atualizador)
+      - id: app-unsigned
+        if: runner.os == 'Windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-unsigned
+          path: release/win-unpacked/Briar.exe
+          if-no-files-found: error
+      - if: steps.app-unsigned.outcome == 'success'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'briar' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY || 'release-signing' }}
+          artifact-configuration-slug: app
+          github-artifact-id: ${{ steps.app-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600 # a assinatura de release espera aprovação manual
+          output-artifact-directory: release/win-unpacked
+      # 2) remonta o instalador e o portátil com o Briar.exe assinado dentro
+      - if: steps.app-unsigned.outcome == 'success'
+        run: npx electron-builder --win nsis portable --prepackaged release/win-unpacked --publish never
+      # 3) assina o instalador e o portátil
+      - id: installers-unsigned
+        if: steps.app-unsigned.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-unsigned
+          path: |
+            release/Briar-Setup.exe
+            release/Briar-Portable.exe
+          if-no-files-found: error
+      - if: steps.installers-unsigned.outcome == 'success'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'briar' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY || 'release-signing' }}
+          artifact-configuration-slug: installers
+          github-artifact-id: ${{ steps.installers-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: release
+      # 4) a assinatura muda o instalador: refaz o .blockmap e o sha512/tamanho no latest.yml
+      - if: steps.installers-unsigned.outcome == 'success'
+        run: node scripts/update-info.mjs release/Briar-Setup.exe release/latest.yml
+
       - uses: actions/upload-artifact@v4
         with:
           name: briar-${{ matrix.os }}

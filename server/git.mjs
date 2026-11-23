@@ -6,8 +6,16 @@ import {homedir} from 'node:os';
 import {createHash} from 'node:crypto';
 const exec=promisify(execFile);
 export class GitError extends Error {constructor(message,status=400){super(message);this.status=status;}}
+// Soma pares de configuração ao ambiente sem apagar os que já existem (GIT_CONFIG_COUNT/KEY/VALUE).
+// Diferente de `git -c`, não aparece na lista de processos e não fica gravado no .git/config.
+export function withConfig(env,pairs){const n=Number(env.GIT_CONFIG_COUNT)||0;const next={...env,GIT_CONFIG_COUNT:String(n+pairs.length)};pairs.forEach(([k,v],i)=>{next[`GIT_CONFIG_KEY_${n+i}`]=k;next[`GIT_CONFIG_VALUE_${n+i}`]=v;});return next;}
+// Token do GitHub como cabeçalho HTTP, só para https://github.com/ (nunca na URL nem em disco).
+export const withGitHubToken=(env,token)=>withConfig(env,[['http.https://github.com/.extraheader',`AUTHORIZATION: basic ${Buffer.from('x-access-token:'+token).toString('base64')}`]]);
+const NETWORK=new Set(['fetch','pull','push','ls-remote']);
 export class GitRepository {
- constructor(root){this.root=root;this.lastFetch=null;this.audit=[];this.tail=Promise.resolve();this.auto={running:null,failedAt:0,error:null};}
+ // githubToken (opcional): async ()=>token|null. Com ele, comandos de rede autenticam em https://github.com/
+ // com a conta conectada no Briar; remotos SSH e de outros servidores seguem com a autenticação do sistema.
+ constructor(root){this.root=root;this.lastFetch=null;this.audit=[];this.tail=Promise.resolve();this.auto={running:null,failedAt:0,error:null};this.githubToken=null;}
  static async open(input){
   if(typeof input!=='string'||!input.trim()||input.includes('\0'))throw new GitError('Informe o caminho de um clone Git local.');
   let root;try{root=await realpath(path.resolve(input==='~'?homedir():input.startsWith('~/')?path.join(homedir(),input.slice(2)):input));}catch{throw new GitError('A pasta não existe ou não pode ser lida.');}
@@ -17,8 +25,13 @@ export class GitRepository {
  }
  async git(args,{allow=[0],timeout=30000,audit=false,env={},literal=true}={}){
   const command='git '+args.map(s=>/^[\w@{}.:/=-]+$/.test(s)?s:JSON.stringify(s)).join(' ');
-  try{const r=await exec('git',[...(literal?['--literal-pathspecs']:[]),'-C',this.root,'--no-pager',...args],{encoding:'utf8',maxBuffer:16*1024*1024,timeout,env:{...process.env,GIT_TERMINAL_PROMPT:'0',GIT_PAGER:'cat',LC_ALL:'C',...env}});if(audit)this.record(command,r.stdout||r.stderr,true);return r.stdout;
+  try{const r=await exec('git',[...(literal?['--literal-pathspecs']:[]),'-C',this.root,'--no-pager',...args],{encoding:'utf8',maxBuffer:16*1024*1024,timeout,env:await this.envFor(args,env)});if(audit)this.record(command,r.stdout||r.stderr,true);return r.stdout;
   }catch(e){if(allow.includes(e.code))return e.stdout||'';const output=(e.stderr||e.stdout||e.message||'Git falhou.').slice(0,12000);if(audit)this.record(command,output,false);throw new GitError(e.killed?'O Git excedeu o tempo limite. Verifique a autenticação no terminal.':output,409);}
+ }
+ async envFor(args,extra={}){
+  const env={...process.env,GIT_TERMINAL_PROMPT:'0',GIT_PAGER:'cat',LC_ALL:'C',...extra};
+  const token=NETWORK.has(args[0])&&this.githubToken?await this.githubToken():null;
+  return token?withGitHubToken(env,token):env;
  }
  record(command,output,success){this.audit.unshift({command,output:output.slice(0,12000),success,date:new Date().toISOString()});this.audit=this.audit.slice(0,20);}
  mutate(fn){const result=this.tail.then(fn);this.tail=result.catch(()=>{});return result;}

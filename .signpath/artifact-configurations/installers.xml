@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SignPath, configuração de artefato "installers": o instalador e o executável portátil.
+     O artefato vem do passo installers-unsigned de .github/workflows/build.yml (zip com os dois na raiz). -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="Briar-Setup.exe">
+      <authenticode-sign/>
+    </pe-file>
+    <pe-file path="Briar-Portable.exe">
+      <authenticode-sign/>
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

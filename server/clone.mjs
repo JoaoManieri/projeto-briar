@@ -5,7 +5,7 @@ import {stat,readdir} from 'node:fs/promises';
 import path from 'node:path';
 import {homedir} from 'node:os';
 import {randomUUID} from 'node:crypto';
-import {GitError} from './git.mjs';
+import {GitError,withGitHubToken} from './git.mjs';
 
 export const expandHome=p=>p==='~'?homedir():/^~[\\/]/.test(p)?path.join(homedir(),p.slice(2)):p;
 
@@ -41,7 +41,7 @@ async function checkParent(input){
 // Erros comuns do Git explicados em português; a saída original vem logo abaixo.
 function explain(log){
  const out=log.replace(/\r/g,'\n').split('\n').map(l=>l.trim()).filter(l=>l&&!/^(?:remote: )?(?:Counting|Compressing|Receiving|Resolving|Enumerating|Total|Updating files)/.test(l)).slice(-12).join('\n');
- const hint=/could not read Username|terminal prompts disabled|Authentication failed|invalid username or password/i.test(log)?'O servidor pediu login. Conecte o GitHub no Briar, configure a autenticação HTTPS do Git (por exemplo, gh auth setup-git) ou use a URL SSH.'
+ const hint=/could not read Username|terminal prompts disabled|Authentication failed|invalid username or password/i.test(log)?'O servidor pediu login. Entre com o GitHub no Briar (aba GitHub), configure a autenticação HTTPS do Git (por exemplo, gh auth setup-git) ou use a URL SSH.'
   :/Permission denied \(publickey/i.test(log)?'A chave SSH foi recusada. Verifique se ela está cadastrada na sua conta (ssh -T git@github.com) ou use a URL HTTPS.'
   :/Host key verification failed/i.test(log)?'O SSH ainda não conhece esse servidor. Rode uma vez no terminal, por exemplo ssh -T git@github.com, e confirme.'
   :/Repository not found|does not appear to be a git repository|not found/i.test(log)?'Repositório não encontrado, ou sua conta não tem acesso a ele.'
@@ -51,10 +51,6 @@ function explain(log){
 }
 
 const PHASES={'Enumerating objects':'Listando objetos','Counting objects':'Contando objetos','Compressing objects':'Comprimindo objetos','Receiving objects':'Recebendo objetos','Resolving deltas':'Resolvendo deltas','Updating files':'Criando os arquivos','Checking out files':'Criando os arquivos'};
-
-// Soma pares de configuração ao ambiente sem apagar os que já existem (GIT_CONFIG_COUNT/KEY/VALUE).
-// Diferente de `git -c`, não aparece na lista de processos e não fica gravado no .git/config do clone.
-function withConfig(env,pairs){const n=Number(env.GIT_CONFIG_COUNT)||0;const next={...env,GIT_CONFIG_COUNT:String(n+pairs.length)};pairs.forEach(([k,v],i)=>{next[`GIT_CONFIG_KEY_${n+i}`]=k;next[`GIT_CONFIG_VALUE_${n+i}`]=v;});return next;}
 
 export class CloneJobs{
  constructor(){this.jobs=new Map();}
@@ -69,7 +65,7 @@ export class CloneJobs{
   const id=randomUUID();
   const job={id,url:source,dest,parent:dir,phase:'Conectando…',percent:null,detail:'',done:false,error:null,root:null};
   let env={...process.env,GIT_TERMINAL_PROMPT:'0',LC_ALL:'C',GIT_ALLOW_PROTOCOL:'https:http:ssh:git:file'};
-  if(token&&/^https:\/\/github\.com\//i.test(source))env=withConfig(env,[['http.https://github.com/.extraheader',`AUTHORIZATION: basic ${Buffer.from('x-access-token:'+token).toString('base64')}`]]);
+  if(token&&/^https:\/\/github\.com\//i.test(source))env=withGitHubToken(env,token);
   let log='',cancelled=false;
   const child=spawn('git',['clone','--progress','--',source,dest],{cwd:dir,env,stdio:['ignore','pipe','pipe'],windowsHide:true});
   const progress=chunk=>{

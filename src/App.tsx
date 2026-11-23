@@ -2,11 +2,12 @@ import {useCallback,useEffect,useMemo,useRef,useState,type CSSProperties,type Re
 import {
   Archive,ArchiveRestore,CloudDownload,FastForward,ArrowDown,ArrowDownToLine,Download,LoaderCircle,RotateCw,ArrowLeft,ArrowUp,ArrowUpToLine,Check,ChevronDown,ChevronRight,CircleAlert,CircleHelp,Cloud,Copy,
   FileCode2,FolderGit2,GitBranch,GitBranchPlus,GitCommitHorizontal,GitMerge,Laptop,LockKeyhole,Maximize2,Minus,Pencil,Plus,
-  RefreshCw,Search,Send,Sprout,Tag,Terminal,Trash2,TriangleAlert,Undo2,X
+  RefreshCw,Search,Send,Settings2,Sprout,Tag,Terminal,Trash2,TriangleAlert,Undo2,X
 } from 'lucide-react';
 import {ancestors,layoutGraph,palette,type History,type Commit} from './history';
 import {api} from './api';
 import {ClonePanel} from './Clone';
+import {SetupWizard,type SetupState} from './Setup';
 
 type FileState={path:string;oldPath?:string;index:string;worktree:string;staged:boolean;unstaged:boolean;untracked:boolean;conflicted:boolean};
 type BranchRef={name:string;sha:string;remote:boolean;upstream?:string|null;ahead?:number;behind?:number};
@@ -612,7 +613,7 @@ function Repo({root,active,updatePill,versionLabel,onHome,onClose,onMeta}:RepoPr
         <label className="field"><span>Nome</span><input data-autofocus value={branchName} onChange={e=>setBranchName(e.target.value.replace(/\s/g,'-'))} placeholder="feature/do-stash" spellCheck={false} autoComplete="off"/></label>
         {s.files.some(f=>!f.untracked)&&<div className="inline-error">Há alterações no WIP. Faça commit ou stash delas antes.</div>}
         <div className="modal-actions"><button type="button" className="btn ghost" onClick={()=>setDialog(null)} disabled={!!busy}>Cancelar</button><button type="submit" className="btn primary" disabled={!!busy||!branchName.trim()||s.files.some(f=>!f.untracked)}>{busy==='stash-branch'?'Criando…':'Criar branch'}</button></div></form>}
-      {dialog==='help'&&<><h2 id="dialog-title"><CircleHelp size={17}/>Como usar</h2><div className="help"><p><b>Grafo:</b> cada coluna é uma linha de desenvolvimento. A branch atual fica na primeira coluna, com traço mais grosso e rótulo destacado com <Check size={11}/>. <Laptop size={11}/> = local, <Cloud size={11}/> = remota.</p><p><b>// WIP:</b> linha no topo com seus arquivos ainda não commitados. Clique nela para fazer stage e commit no painel à direita.</p><p><b>Branches:</b> clique para localizar no grafo; duplo clique faz checkout (se a branch local já existe, o Briar troca para ela e a atualiza com o remoto). <b>Arraste uma branch sobre outra</b> (na lateral, no grafo ou no seletor de branch do topo) para abrir o merge.</p><p><b>Fast-forward:</b> se a branch de destino só está atrás, na mesma linha, o merge apenas a avança, sem checkout e sem precisar de WIP limpo. Branches locais atrás do remoto mostram <ArrowDown size={11}/>N na lateral, e o botão <FastForward size={11}/> as atualiza sem trocar de branch.</p><p><b>Merge:</b> mostra antes quais arquivos terão conflito. Se houver, cada arquivo aparece em "Conflitos" e o aviso vermelho fica no topo até alguém resolver: escolha trecho a trecho a sua versão, a recebida ou as duas, ou edite no editor e marque como resolvido. Depois clique em <b>Concluir merge</b> — ou <b>Abortar</b> para voltar ao estado anterior.</p><p><b>Botão direito</b> numa branch, tag ou commit abre o menu: criar tag (já sugere o próximo número), push de tag e apagar branch ou tag, local ou no remoto.</p><p><b>Stash:</b> <b>Stash</b> no topo (ou no painel do WIP) guarda as alterações e limpa o WIP. Os stashes ficam na lateral: clique num deles para ver os arquivos e as opções (<b>Pop</b>, <b>Aplicar</b>, <b>Branch</b>, <b>Apagar</b>). <b>Pop</b> no topo traz de volta o mais recente. Se der conflito, o stash continua guardado.</p><p><b>Pull / Push / Fetch:</b> usam a autenticação Git já configurada. Nunca há force push.</p><p><b>Clonar:</b> no <b>+</b> da barra de abas (<kbd>Ctrl</kbd>+<kbd>T</kbd>), escolha <b>Clonar</b>. Cole a URL, ou conecte o GitHub (pelo login do GitHub CLI ou com um token) e escolha na lista. O clone abre numa aba nova.</p><p><kbd>/</kbd> busca · <kbd>↑</kbd><kbd>↓</kbd> navegam · <kbd>esc</kbd> fecha.</p></div></>}
+      {dialog==='help'&&<><h2 id="dialog-title"><CircleHelp size={17}/>Como usar</h2><div className="help"><p><b>Grafo:</b> cada coluna é uma linha de desenvolvimento. A branch atual fica na primeira coluna, com traço mais grosso e rótulo destacado com <Check size={11}/>. <Laptop size={11}/> = local, <Cloud size={11}/> = remota.</p><p><b>// WIP:</b> linha no topo com seus arquivos ainda não commitados. Clique nela para fazer stage e commit no painel à direita.</p><p><b>Branches:</b> clique para localizar no grafo; duplo clique faz checkout (se a branch local já existe, o Briar troca para ela e a atualiza com o remoto). <b>Arraste uma branch sobre outra</b> (na lateral, no grafo ou no seletor de branch do topo) para abrir o merge.</p><p><b>Fast-forward:</b> se a branch de destino só está atrás, na mesma linha, o merge apenas a avança, sem checkout e sem precisar de WIP limpo. Branches locais atrás do remoto mostram <ArrowDown size={11}/>N na lateral, e o botão <FastForward size={11}/> as atualiza sem trocar de branch.</p><p><b>Merge:</b> mostra antes quais arquivos terão conflito. Se houver, cada arquivo aparece em "Conflitos" e o aviso vermelho fica no topo até alguém resolver: escolha trecho a trecho a sua versão, a recebida ou as duas, ou edite no editor e marque como resolvido. Depois clique em <b>Concluir merge</b> — ou <b>Abortar</b> para voltar ao estado anterior.</p><p><b>Botão direito</b> numa branch, tag ou commit abre o menu: criar tag (já sugere o próximo número), push de tag e apagar branch ou tag, local ou no remoto.</p><p><b>Stash:</b> <b>Stash</b> no topo (ou no painel do WIP) guarda as alterações e limpa o WIP. Os stashes ficam na lateral: clique num deles para ver os arquivos e as opções (<b>Pop</b>, <b>Aplicar</b>, <b>Branch</b>, <b>Apagar</b>). <b>Pop</b> no topo traz de volta o mais recente. Se der conflito, o stash continua guardado.</p><p><b>Pull / Push / Fetch:</b> usam a autenticação Git já configurada. Com o GitHub conectado no Briar, remotos <code>https://github.com</code> usam essa conta. Nunca há force push.</p><p><b>Clonar:</b> no <b>+</b> da barra de abas (<kbd>Ctrl</kbd>+<kbd>T</kbd>), escolha <b>Clonar</b>. Cole a URL, ou entre com o GitHub (pelo navegador, pelo GitHub CLI ou com um token) e escolha na lista. O clone abre numa aba nova.</p><p><b>Configurar Git e GitHub:</b> na tela inicial, instala o Git se faltar, conecta a conta do GitHub e define o nome e o e-mail dos commits.</p><p><kbd>/</kbd> busca · <kbd>↑</kbd><kbd>↓</kbd> navegam · <kbd>esc</kbd> fecha.</p></div></>}
       {error&&<div className="inline-error" role="alert">{error}<button aria-label="Dispensar" onClick={()=>setError('')}><X size={13}/></button></div>}
     </div></div>}
     {error&&!dialog&&<div className="error-toast" role="alert"><CircleAlert size={15}/><span>{error}</span><button aria-label="Dispensar erro" onClick={()=>setError('')}><X size={14}/></button></div>}
@@ -639,10 +640,17 @@ export default function App(){
   const [opening,setOpening]=useState(false);
   const [homeMode,setHomeMode]=useState<'open'|'clone'>('open');
   const [cloning,setCloning]=useState(false);
+  const [cloneSource,setCloneSource]=useState<'url'|'github'>('url');
+  // Assistente de primeiro uso (Git, GitHub, nome/e-mail). undefined = ainda consultando o servidor.
+  const [setup,setSetup]=useState<SetupState|null|undefined>(undefined);
+  const [wizard,setWizard]=useState(false);
   const pathInput=useRef<HTMLInputElement>(null);
-  const showHome=home||!ws?.tabs.length;
+  const showHome=home||wizard||!ws?.tabs.length;
 
   useEffect(()=>{api('workspace').then((w:Workspace)=>{setWs(w);if(w.initialError)setError(w.initialError);}).catch(e=>setError((e as Error).message));},[]);
+  useEffect(()=>{api('setup').then((s:SetupState)=>{setSetup(s);if(s.needed)setWizard(true);}).catch(()=>setSetup(null));},[]);
+  async function openSetup(){setError('');try{setSetup(await api('setup'));setWizard(true);}catch(e){setError((e as Error).message);}}
+  function setupFinished(github:boolean){setWizard(false);if(github){setCloneSource('github');setHomeMode('clone');}}
   useEffect(()=>{const u=window.briar?.update;if(!u)return;u.state().then(setUpdate).catch(()=>{});return u.onChange(setUpdate);},[]);
   useEffect(()=>{if(update?.status==='ready'&&update.error)setError(update.error);},[update?.error]);
   useEffect(()=>{if(toast){const t=setTimeout(()=>setToast(''),5000);return()=>clearTimeout(t);}},[toast]);
@@ -665,7 +673,7 @@ export default function App(){
     if(!ws)return;
     if(e.ctrlKey&&e.key.toLowerCase()==='t'){e.preventDefault();onHome();return;}
     if(e.ctrlKey&&e.key==='Tab'&&ws.tabs.length){e.preventDefault();const i=showHome?-1:ws.tabs.findIndex(t=>t.root===ws.active);const n=ws.tabs.length;activate(ws.tabs[((e.shiftKey?i-1:i+1)%n+n)%n].root);return;}
-    if(e.key==='Escape'&&home&&ws.tabs.length&&!(e.target as HTMLElement).closest('input'))setHome(false);
+    if(e.key==='Escape'&&home&&!wizard&&ws.tabs.length&&!(e.target as HTMLElement).closest('input'))setHome(false);
   }window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);});
 
   const updatePill=update&&(update.status==='downloading'?<span className="update-pill busy" title="A nova versão está sendo baixada em segundo plano."><LoaderCircle size={13} className="spinning"/>Baixando {update.version} · {update.percent||0}%</span>
@@ -675,7 +683,7 @@ export default function App(){
     :null);
   const versionLabel=update&&update.status!=='disabled'&&<button className="status-link" onClick={checkUpdate} disabled={update.status==='checking'||update.status==='downloading'||update.status==='installing'} title={update.status==='error'?`Falha ao procurar atualização: ${update.error}\nClique para tentar de novo.`:'Procurar atualização'}>{update.status==='checking'?<LoaderCircle size={11} className="spinning"/>:update.status==='error'?<TriangleAlert size={11}/>:<Sprout size={11}/>}Briar {update.current}</button>;
 
-  if(!ws)return <div className="shell"><div className="welcome"><div className="welcome-card"><span className="brand"><span className="brand-icon"><Sprout size={18}/></span><span>Briar</span></span>{error?<div className="inline-error" role="alert">{error}</div>:<p className="muted">Conectando ao servidor Git local…</p>}</div></div></div>;
+  if(!ws||setup===undefined)return <div className="shell"><div className="welcome"><div className="welcome-card"><span className="brand"><span className="brand-icon"><Sprout size={18}/></span><span>Briar</span></span>{error?<div className="inline-error" role="alert">{error}</div>:<p className="muted">Conectando ao servidor Git local…</p>}</div></div></div>;
 
   const recent=ws.recent;
   return <div className="shell">
@@ -691,11 +699,12 @@ export default function App(){
       <button className={`tab-add ${showHome?'on':''}`} onClick={onHome} title={cloning?'Clonando… (clique para acompanhar)':'Abrir ou clonar repositório em nova aba (Ctrl+T)'} aria-label="Nova aba">{cloning?<LoaderCircle size={15} className="spinning"/>:<Plus size={15}/>}</button>
     </nav>
     {ws.tabs.map(t=><Repo key={t.root} root={t.root} active={!showHome&&ws.active===t.root} updatePill={updatePill} versionLabel={versionLabel} onHome={onHome} onClose={()=>close(t.root)} onMeta={onMeta}/>)}
-    <div className="welcome home" hidden={!showHome}><div className={`welcome-card home-card ${homeMode==='clone'?'cloning':''}`}>
+    {wizard&&setup&&<div className="welcome home"><SetupWizard initial={setup} onFinish={setupFinished}/></div>}
+    {!wizard&&<div className="welcome home" hidden={!showHome}><div className={`welcome-card home-card ${homeMode==='clone'?'cloning':''}`}>
       <span className="brand"><span className="brand-icon"><Sprout size={18}/></span><span>Briar</span></span>
       <div className="home-head"><h1>{homeMode==='clone'?'Clonar repositório':'Abrir repositório'}</h1>
         <div className="seg" role="tablist" aria-label="Abrir ou clonar"><button role="tab" aria-selected={homeMode==='open'} className={homeMode==='open'?'on':''} onClick={()=>setHomeMode('open')}><FolderGit2 size={13}/>Abrir</button><button role="tab" aria-selected={homeMode==='clone'} className={homeMode==='clone'?'on':''} onClick={()=>setHomeMode('clone')}><CloudDownload size={13}/>Clonar</button></div></div>
-      <div hidden={homeMode!=='clone'}><ClonePanel defaultDir={ws.cloneDir} onCloned={onCloned} onRunning={setCloning}/></div>
+      <div hidden={homeMode!=='clone'}><ClonePanel defaultDir={ws.cloneDir} onCloned={onCloned} onRunning={setCloning} initialSource={cloneSource}/></div>
       {homeMode==='open'&&<>
       {recent.length>0&&<><div className="recent-title">Repositórios salvos</div><div className="recent">{recent.map(r=><div key={r.root} className="recent-row">
         <button className="recent-main" disabled={opening} onClick={()=>r.open?activate(r.root):openPath(r.root)} title={r.open?'Ir para a aba':'Abrir numa nova aba'}><FolderGit2 size={15}/><span className="recent-text"><b>{r.name}</b><span>{r.root}</span></span>{r.open&&<span className="recent-open">aberto</span>}</button>
@@ -705,9 +714,9 @@ export default function App(){
       <p className="home-switch">Ainda não tem o projeto no computador? <button className="linkish" onClick={()=>setHomeMode('clone')}>Clonar do GitHub ou de uma URL</button></p>
       </>}
       {error&&<div className="inline-error" role="alert">{error}<button aria-label="Dispensar" onClick={()=>setError('')}><X size={13}/></button></div>}
-      <p className="welcome-note"><LockKeyhole size={13}/>Servidor local em 127.0.0.1. Nada é enviado para hospedagem.{ws.tabs.length>0&&<> · <kbd>Esc</kbd> volta para a aba</>}</p>
+      <p className="welcome-note"><LockKeyhole size={13}/>Servidor local em 127.0.0.1. Nada é enviado para hospedagem.{ws.tabs.length>0&&<> · <kbd>Esc</kbd> volta para a aba</>}<span className="grow"/><button className="linkish setup-link" disabled={cloning} onClick={openSetup} title={cloning?'Espere o clone terminar.':'Instalar o Git, conectar o GitHub, nome e e-mail dos commits'}><Settings2 size={12}/>Configurar Git e GitHub</button></p>
       {updatePill&&<div className="welcome-update">{updatePill}</div>}
-    </div></div>
+    </div></div>}
     {!showHome&&error&&<div className="error-toast" role="alert"><CircleAlert size={15}/><span>{error}</span><button aria-label="Dispensar erro" onClick={()=>setError('')}><X size={14}/></button></div>}
     {toast&&<div className="toast" role="status"><Check size={15}/>{toast}</div>}
   </div>;

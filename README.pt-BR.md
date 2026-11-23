@@ -19,11 +19,17 @@ Todas as versões: [página de Releases](https://github.com/JoaoManieri/projeto-
 
 ### Antes de instalar
 
-Instale o **Git** ([git-scm.com/downloads](https://git-scm.com/downloads)). Para push e pull, ele precisa estar autenticado no GitHub do mesmo jeito que no terminal.
+Não precisa instalar nada antes. Na primeira vez que abre, o Briar mostra **Vamos deixar tudo pronto**:
+
+1. **Git:** se faltar, o Briar instala. No Windows usa o winget ou o instalador oficial do Git for Windows; no Linux, o gerenciador de pacotes. O sistema pede a permissão de administrador. O `.deb` já instala o Git junto.
+2. **Conta do GitHub (opcional):** **Entrar com o GitHub** abre o navegador com um código para autorizar o Briar. Também dá para usar o login do GitHub CLI ou um token.
+3. **Nome e e-mail dos commits:** vêm sugeridos da conta do GitHub, inclusive o endereço privado `noreply`.
+
+Para refazer depois: **Configurar Git e GitHub**, no rodapé da tela inicial.
 
 ### Instalar
 
-- **Windows:** abra `Briar-Setup.exe` e siga o instalador. Os executáveis não são assinados, então o SmartScreen pode avisar. Nesse caso clique em **Mais informações → Executar assim mesmo**.
+- **Windows:** abra `Briar-Setup.exe` e siga o instalador. Os executáveis ainda não são assinados, então o SmartScreen pode avisar. Nesse caso clique em **Mais informações → Executar assim mesmo**. A assinatura vai vir pela SignPath Foundation ([política de assinatura](CODE_SIGNING_POLICY.md), [passo a passo](docs/assinatura-windows.md)).
 - **Linux (AppImage):** `chmod +x Briar-x86_64.AppImage` e abra o arquivo.
 - **Linux (.deb):** `sudo apt install ./Briar-amd64.deb`. Para desinstalar: `sudo apt remove briar`.
 
@@ -50,7 +56,8 @@ A atualização automática começou na versão 0.4.0. Quem tem uma versão ante
 - **Clonar repositório.** No **+** (ou <kbd>Ctrl</kbd>+<kbd>T</kbd>), escolha **Clonar**.
   - **URL:** cole o endereço (`https://…`, `git@github.com:…` ou um caminho local), escolha a pasta e o nome. O comando aparece antes, e o andamento (fase, %, velocidade) aparece durante, com **Cancelar**.
   - **GitHub:** conecte a conta e escolha na lista os seus repositórios, os das organizações e aqueles em que você colabora, com filtro. Dá para escolher SSH ou HTTPS; o padrão segue o que o GitHub CLI usa.
-  - Para conectar, o Briar usa o login do **GitHub CLI** (`gh auth login`), se ele estiver instalado, ou um **token de acesso pessoal** com o escopo `repo` ([criar token](https://github.com/settings/tokens/new?description=Briar&scopes=repo)). O token fica cifrado pelo cofre do sistema; sem cofre, vale só até fechar o Briar. Ele é usado só para listar e para o clone HTTPS do github.com, e nunca vai para a URL do remoto nem para o `.git/config`.
+  - Para conectar: **Entrar com o GitHub** (abre o navegador com um código para autorizar), o login do **GitHub CLI** (`gh auth login`) ou um **token de acesso pessoal** com o escopo `repo` ([criar token](https://github.com/settings/tokens/new?description=Briar&scopes=repo,workflow,read:org,user:email)).
+  - O token fica cifrado pelo cofre do sistema; sem cofre, vale só até fechar o Briar. Ele serve para a API do GitHub e para clone, fetch, pull e push em remotos `https://github.com`. Vai para o Git como cabeçalho HTTP e nunca para a URL do remoto nem para o `.git/config`. Remotos SSH e de outros servidores continuam com a autenticação do sistema.
   - Quando termina, o clone abre numa aba nova. Dá para voltar às outras abas enquanto ele roda: o **+** fica girando.
 
   ![Tela de clone](docs/images/clone.png)
@@ -115,9 +122,11 @@ No modo navegador dá para indicar o clone ao iniciar: `npm run dev -- --repo ~/
 Estrutura:
 
 - `src/`: interface (React).
-- `server/`: operações Git, chamando o `git` do sistema (`git.mjs`), clone (`clone.mjs`) e conta do GitHub (`github.mjs`).
+- `server/`: operações Git, chamando o `git` do sistema (`git.mjs`), clone (`clone.mjs`), conta do GitHub e login pelo navegador (`github.mjs`) e primeiro uso: instalar o Git, nome e e-mail (`setup.mjs`).
 - `electron/`: janela do aplicativo.
-- `tests/`: testes da camada Git.
+- `tests/`: testes da camada Git e do primeiro uso.
+
+O login pelo navegador precisa do Client ID do OAuth App do Briar, em `OAUTH_CLIENT_ID` (`server/github.mjs`). Para testar com outro app: `BRIAR_GITHUB_CLIENT_ID=… npm run app`.
 
 ## Publicar uma versão
 
@@ -133,6 +142,7 @@ Os links de download e a atualização automática usam sempre a Release mais re
 - **Push sem Release:** ponha `[skip ci]` na mensagem do commit. Pushes que só mexem em arquivos `.md`, `LICENSE` ou `.gitignore` também não geram Release.
 - **Não crie tags `v*` à mão.** O próprio workflow cria.
 - Se o build falhar, a Release fica como rascunho e nada chega aos usuários. O próximo push tenta de novo com o mesmo número.
+- **Assinatura do Windows:** quando a SignPath estiver configurada, o workflow assina o `Briar.exe`, o instalador e o portátil e espera aprovação no site da SignPath. Veja [docs/assinatura-windows.md](docs/assinatura-windows.md).
 
 Para gerar e publicar à mão (só se o GitHub Actions estiver fora do ar):
 

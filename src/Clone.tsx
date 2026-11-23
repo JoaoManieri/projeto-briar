@@ -1,8 +1,7 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
-import {CloudDownload,FolderOpen,Globe,KeyRound,Link,LoaderCircle,Lock,LogOut,RefreshCw,Search,X} from 'lucide-react';
+import {CloudDownload,FolderOpen,Globe,Link,LoaderCircle,Lock,LogOut,RefreshCw,Search,X} from 'lucide-react';
 import {api} from './api';
-
-type GitHubStatus={connected:boolean;source:'gh'|'token'|null;user:{login:string;name:string|null;avatar:string|null}|null;gh:boolean;canStore:boolean;protocol:'ssh'|'https';error?:string};
+import {GitHubConnect,GitHubMark,sourceLabel,type GitHubStatus} from './GitHub';
 type GhRepo={fullName:string;owner:string;name:string;private:boolean;fork:boolean;archived:boolean;description:string;pushedAt:string|null;https:string;ssh:string};
 type Job={id:string;url:string;dest:string;phase:string;percent:number|null;detail:string;done:boolean;error:string|null;root:string|null;running:boolean};
 
@@ -15,12 +14,11 @@ function ago(date:string|null){
   for(const [unit,n] of [['year',31536000],['month',2592000],['week',604800],['day',86400],['hour',3600],['minute',60]] as [Intl.RelativeTimeFormatUnit,number][])if(Math.abs(s)>=n)return rtf.format(Math.round(s/n),unit);
   return 'agora';
 }
-export const GitHubMark=({size=15}:{size?:number})=><svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>;
 
 // Clonar: colando a URL ou escolhendo na lista de repositórios da conta do GitHub. O clone roda no
 // servidor local; aqui só acompanhamos o andamento. No fim, ele abre numa aba nova (onCloned).
-export function ClonePanel({defaultDir,onCloned,onRunning}:{defaultDir:string;onCloned:(root:string)=>void;onRunning:(running:boolean)=>void}){
-  const [source,setSource]=useState<'url'|'github'>('url');
+export function ClonePanel({defaultDir,onCloned,onRunning,initialSource='url'}:{defaultDir:string;onCloned:(root:string)=>void;onRunning:(running:boolean)=>void;initialSource?:'url'|'github'}){
+  const [source,setSource]=useState<'url'|'github'>(initialSource);
   const [url,setUrl]=useState('');
   const [parent,setParent]=useState(defaultDir);
   const [name,setName]=useState('');
@@ -31,7 +29,6 @@ export function ClonePanel({defaultDir,onCloned,onRunning}:{defaultDir:string;on
   const [filter,setFilter]=useState('');
   const [picked,setPicked]=useState<GhRepo|null>(null);
   const [protocol,setProtocol]=useState<'ssh'|'https'>('https');
-  const [token,setToken]=useState('');
   const [job,setJob]=useState<Job|null>(null);
   const [error,setError]=useState('');
   const finished=useRef('');
@@ -46,11 +43,7 @@ export function ClonePanel({defaultDir,onCloned,onRunning}:{defaultDir:string;on
   async function loadRepos(refresh=false){try{setRepos((await api('github/repos'+(refresh?'?refresh=1':''))).repos);}catch(e){setError((e as Error).message);}}
   async function loadGh(){setGhBusy(true);setError('');try{const st:GitHubStatus=await api('github');setGh(st);setProtocol(st.protocol);if(st.connected)await loadRepos();}catch(e){setError((e as Error).message);}finally{setGhBusy(false);}}
   useEffect(()=>{if(source==='github'&&!gh&&!ghBusy)void loadGh();},[source]);
-  async function connect(how:'gh'|'token'){
-    setGhBusy(true);setError('');
-    try{const st:GitHubStatus=await api('github/connect',how==='gh'?{source:'gh'}:{source:'token',token:token.trim()});setGh(st);setToken('');setProtocol(st.protocol);setRepos(null);if(st.connected)await loadRepos();}
-    catch(e){setError((e as Error).message);}finally{setGhBusy(false);}
-  }
+  function connected(st:GitHubStatus){setGh(st);setProtocol(st.protocol);setRepos(null);if(st.connected)void loadRepos();}
   async function disconnect(){try{setGh(await api('github/disconnect',{}));setRepos(null);setPicked(null);}catch(e){setError((e as Error).message);}}
 
   // Andamento do clone: consulta o servidor enquanto ele roda.
@@ -84,18 +77,9 @@ export function ClonePanel({defaultDir,onCloned,onRunning}:{defaultDir:string;on
     {source==='url'&&<label className="field"><span>URL do repositório</span><input autoFocus value={url} disabled={running} onChange={e=>setUrl(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')void start();}} placeholder="https://github.com/dono/projeto.git  ou  git@github.com:dono/projeto.git" spellCheck={false} autoComplete="off"/></label>}
 
     {source==='github'&&(!gh?<p className="muted gh-empty">{ghBusy?<><LoaderCircle size={13} className="spinning"/> Consultando o GitHub…</>:null}</p>
-      :!gh.connected?<div className="gh-connect">
-        {gh.error&&<p className="note warn-note">{gh.error}</p>}
-        <p className="modal-text">Conecte sua conta para escolher entre os seus repositórios, inclusive os privados e os das suas organizações.</p>
-        {gh.gh&&<button className="btn primary" disabled={ghBusy} onClick={()=>connect('gh')}><GitHubMark size={14}/>{ghBusy?'Conectando…':'Usar o login do GitHub CLI'}</button>}
-        <form onSubmit={e=>{e.preventDefault();void connect('token');}}>
-          <label className="field"><span>{gh.gh?'Ou um token de acesso pessoal':'Token de acesso pessoal'}</span><span className="input-row"><input type="password" value={token} onChange={e=>setToken(e.target.value)} placeholder="ghp_…  ou  github_pat_…" autoComplete="off" spellCheck={false}/><button className="btn ghost" type="submit" disabled={ghBusy||!token.trim()}><KeyRound size={13}/>Conectar</button></span></label>
-          <p className="muted small">Crie em <a href="https://github.com/settings/tokens/new?description=Briar&scopes=repo" target="_blank" rel="noreferrer">github.com/settings/tokens</a> com o escopo <code>repo</code>. {gh.canStore?'O token fica guardado cifrado neste computador.':'O token vale até fechar o Briar.'}{!gh.gh&&<> Com o <a href="https://cli.github.com" target="_blank" rel="noreferrer">GitHub CLI</a> logado (<code>gh auth login</code>), nem precisa de token.</>}</p>
-        </form>
-        {gh.source&&<button className="linkish small" onClick={disconnect}>Esquecer a conexão salva</button>}
-      </div>
+      :!gh.connected?<GitHubConnect status={gh} onConnected={connected} onForget={disconnect} intro="Conecte sua conta para escolher entre os seus repositórios, inclusive os privados e os das suas organizações."/>
       :<>
-        <div className="gh-account">{avatar?<img src={avatar} alt="" width={22} height={22}/>:<GitHubMark size={18}/>}<span><b>{gh.user?.login}</b> <span className="muted">· via {gh.source==='gh'?'GitHub CLI':'token'}</span></span><span className="grow"/>
+        <div className="gh-account">{avatar?<img src={avatar} alt="" width={22} height={22}/>:<GitHubMark size={18}/>}<span><b>{gh.user?.login}</b> <span className="muted">· via {sourceLabel(gh.source)}</span></span><span className="grow"/>
           <button className="icon-btn" title="Recarregar a lista" aria-label="Recarregar a lista" disabled={running} onClick={()=>{setRepos(null);void loadRepos(true);}}><RefreshCw size={13}/></button>
           <button className="btn ghost xs" disabled={running} onClick={disconnect}><LogOut size={12}/>Desconectar</button></div>
         <label className="side-filter gh-filter"><Search size={12}/><input autoFocus placeholder="Filtrar repositórios" value={filter} onChange={e=>setFilter(e.target.value)}/>{repos&&<span className="muted small">{shown.length}</span>}</label>
