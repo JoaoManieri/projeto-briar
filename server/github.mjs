@@ -52,8 +52,9 @@ export async function githubRepos(token){
 
 // Login pelo navegador (OAuth device flow): o Briar pede um código ao GitHub, a pessoa confirma em
 // github.com/login/device e o GitHub entrega o token. Esse fluxo não tem segredo de cliente, então o
-// Client ID do OAuth App do Briar pode ficar no código aberto. Vazio = o botão "Entrar com o GitHub" some.
-export const OAUTH_CLIENT_ID=process.env.BRIAR_GITHUB_CLIENT_ID||'';
+// Client ID do OAuth App do Briar pode ficar no código aberto (BRIAR_GITHUB_CLIENT_ID troca por outro app;
+// vazio = o botão "Entrar com o GitHub" some).
+export const OAUTH_CLIENT_ID=process.env.BRIAR_GITHUB_CLIENT_ID||'Ov23lifScIlfTwhU0jCh';
 // repo: clonar e enviar para privados · workflow: push que mexe em .github/workflows
 // read:org: repositórios das organizações · user:email: sugerir o e-mail dos commits
 export const OAUTH_SCOPES='repo workflow read:org user:email';

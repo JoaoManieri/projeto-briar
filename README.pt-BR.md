@@ -126,7 +126,7 @@ Estrutura:
 - `electron/`: janela do aplicativo.
 - `tests/`: testes da camada Git e do primeiro uso.
 
-O login pelo navegador precisa do Client ID do OAuth App do Briar, em `OAUTH_CLIENT_ID` (`server/github.mjs`). Para testar com outro app: `BRIAR_GITHUB_CLIENT_ID=… npm run app`.
+O login pelo navegador usa o OAuth App do Briar, cujo Client ID fica em `OAUTH_CLIENT_ID` (`server/github.mjs`). Para testar com outro app: `BRIAR_GITHUB_CLIENT_ID=… npm run app`.
 
 ## Publicar uma versão
 
